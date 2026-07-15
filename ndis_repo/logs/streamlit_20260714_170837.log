@@ -1,0 +1,2 @@
+2026-07-14 17:08:37 [INFO] root: Logging initialized
+2026-07-14 17:08:37 [INFO] httpx: HTTP Request: GET http://localhost:8000/documents "HTTP/1.1 200 OK"

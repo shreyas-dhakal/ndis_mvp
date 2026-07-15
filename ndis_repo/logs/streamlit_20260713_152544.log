@@ -1,0 +1,7 @@
+2026-07-13 15:25:44 [INFO] root: Logging initialized
+2026-07-13 15:26:34 [INFO] httpx: HTTP Request: POST http://localhost:8000/ingest/file "HTTP/1.1 500 Internal Server Error"
+2026-07-13 15:29:32 [INFO] uvicorn.access: ::1:53448 - "GET / HTTP/1.1" 304
+2026-07-13 15:29:32 [INFO] uvicorn.access: ::1:53448 - "GET /_stcore/health HTTP/1.1" 200
+2026-07-13 15:29:32 [INFO] uvicorn.access: ::1:53450 - "GET /_stcore/host-config HTTP/1.1" 200
+2026-07-13 15:29:32 [INFO] uvicorn.error: ::1:53451 - "WebSocket /_stcore/stream" [accepted]
+2026-07-13 15:29:32 [INFO] uvicorn.error: connection open

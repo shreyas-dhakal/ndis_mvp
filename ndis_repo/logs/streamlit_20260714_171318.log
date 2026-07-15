@@ -1,0 +1,3 @@
+2026-07-14 17:13:18 [INFO] root: Logging initialized
+2026-07-14 17:13:18 [INFO] httpx: HTTP Request: GET http://localhost:8000/documents "HTTP/1.1 200 OK"
+2026-07-14 17:13:33 [INFO] uvicorn.access: ::1:54701 - "PUT /_stcore/upload_file/6bc0f0e9-5264-4180-907a-84ced67df872/48d8efaf-01ba-4ef8-9077-958b256edfad HTTP/1.1" 204

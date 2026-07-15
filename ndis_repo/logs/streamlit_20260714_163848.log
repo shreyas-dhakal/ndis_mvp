@@ -1,0 +1,2 @@
+2026-07-14 16:38:48 [INFO] root: Logging initialized
+2026-07-14 16:38:50 [INFO] httpx: HTTP Request: POST http://localhost:8000/ingest/file "HTTP/1.1 200 OK"

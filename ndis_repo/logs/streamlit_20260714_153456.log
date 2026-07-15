@@ -1,0 +1,2 @@
+2026-07-14 15:34:56 [INFO] root: Logging initialized
+2026-07-14 15:35:13 [INFO] httpx: HTTP Request: POST http://localhost:8000/agent/answer "HTTP/1.1 200 OK"

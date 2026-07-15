@@ -1,0 +1,55 @@
+version: 1
+updated_by: "<compliance-lead-to-fill-in>"
+triggers:
+  - id: reportable_incident_injury
+    description: >
+      Any mention of physical injury to the participant, however minor,
+      that occurred during a supported activity.
+    examples_positive:
+      - "she fell during the walk and scraped her knee"
+      - "bumped his head getting into the car"
+    examples_negative:
+      - "he mentioned an old injury from before we started support"
+    workflow: incident_report
+    deadline_hours: 24
+
+  - id: reportable_incident_medication
+    description: >
+      Missed dose, wrong dose, or medication administered without
+      required authorisation.
+    examples_positive:
+      - "forgot to give the afternoon medication"
+      - "gave the wrong dosage by mistake"
+    workflow: incident_report
+    deadline_hours: 24
+
+  - id: safeguarding_concern
+    description: >
+      Any statement suggesting possible abuse, neglect, exploitation,
+      or the participant expressing fear of a person.
+    examples_positive:
+      - "she seemed scared when her cousin came to visit"
+      - "he said someone at the day program yelled at him"
+    workflow: safeguarding_review
+    deadline_hours: 4
+
+  - id: goal_regression
+    description: >
+      Participant is losing a previously achieved skill or goal
+      progress, as opposed to normal day-to-day variation.
+    examples_positive:
+      - "she used to make her own lunch but now refuses to try"
+    examples_negative:
+      - "had an off day today, didn't want to do the usual activities"
+    workflow: plan_review_flag
+    deadline_hours: 168
+
+  - id: consent_gap
+    description: >
+      A supported activity occurred where consent status is unclear
+      or explicitly not obtained.
+    examples_positive:
+      - "consent_noted field is null or false, and the note describes
+         a new or unusual activity"
+    workflow: consent_followup
+    deadline_hours: 72

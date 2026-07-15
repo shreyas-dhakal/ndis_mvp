@@ -1,0 +1,7 @@
+2026-07-13 17:13:41 [INFO] root: Logging initialized
+2026-07-13 17:15:19 [INFO] httpx: HTTP Request: POST http://localhost:8000/agent/answer "HTTP/1.1 200 OK"
+2026-07-13 17:17:00 [INFO] uvicorn.access: ::1:54118 - "GET / HTTP/1.1" 304
+2026-07-13 17:17:00 [INFO] uvicorn.access: ::1:54118 - "GET /_stcore/health HTTP/1.1" 200
+2026-07-13 17:17:00 [INFO] uvicorn.access: ::1:54121 - "GET /_stcore/host-config HTTP/1.1" 200
+2026-07-13 17:17:00 [INFO] uvicorn.error: ::1:54122 - "WebSocket /_stcore/stream" [accepted]
+2026-07-13 17:17:00 [INFO] uvicorn.error: connection open
