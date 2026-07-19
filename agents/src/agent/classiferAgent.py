@@ -14,7 +14,7 @@ from .local_llm import invoke_structured
 
 load_dotenv()
 
-taxomony_path = Path(__file__).resolve().parent / "taxomony.yaml"
+taxonomy_path = Path(__file__).resolve().parent / "taxonomy.yaml"
 
 conn_string = os.getenv("DATABASE_URL")
 if not conn_string:
@@ -42,7 +42,7 @@ graph = StateGraph(ClassifierAgent)
 
 
 def load_taxonomy() -> list[dict]:
-    with open(taxomony_path) as f:
+    with open(taxonomy_path) as f:
         return yaml.safe_load(f)["triggers"]
 
 
