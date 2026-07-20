@@ -1,9 +1,0 @@
-2026-07-13 17:42:26 [INFO] root: Logging initialized
-2026-07-13 17:43:46 [INFO] httpx: HTTP Request: POST http://localhost:8000/agent/answer "HTTP/1.1 200 OK"
-2026-07-13 17:45:27 [INFO] uvicorn.access: ::1:54725 - "GET /static/js/remark-emoji.B31HJThA.js HTTP/1.1" 200
-2026-07-13 17:45:27 [INFO] uvicorn.access: ::1:54726 - "GET /static/js/lib.DMXOZN7d.js HTTP/1.1" 200
-2026-07-13 17:47:36 [INFO] uvicorn.access: ::1:54987 - "GET / HTTP/1.1" 304
-2026-07-13 17:47:36 [INFO] uvicorn.access: ::1:54987 - "GET /_stcore/health HTTP/1.1" 200
-2026-07-13 17:47:36 [INFO] uvicorn.access: ::1:54989 - "GET /_stcore/host-config HTTP/1.1" 200
-2026-07-13 17:47:36 [INFO] uvicorn.error: ::1:54990 - "WebSocket /_stcore/stream" [accepted]
-2026-07-13 17:47:36 [INFO] uvicorn.error: connection open

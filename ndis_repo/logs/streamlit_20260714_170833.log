@@ -1,8 +1,0 @@
-2026-07-14 17:08:33 [INFO] root: Logging initialized
-2026-07-14 17:08:33 [INFO] httpx: HTTP Request: DELETE http://localhost:8000/documents/16 "HTTP/1.1 200 OK"
-2026-07-14 17:08:33 [INFO] httpx: HTTP Request: GET http://localhost:8000/documents "HTTP/1.1 200 OK"
-2026-07-14 17:08:35 [INFO] uvicorn.access: ::1:54638 - "GET / HTTP/1.1" 304
-2026-07-14 17:08:35 [INFO] uvicorn.access: ::1:54638 - "GET /_stcore/health HTTP/1.1" 200
-2026-07-14 17:08:35 [INFO] uvicorn.access: ::1:54639 - "GET /_stcore/host-config HTTP/1.1" 200
-2026-07-14 17:08:35 [INFO] uvicorn.error: ::1:54640 - "WebSocket /_stcore/stream" [accepted]
-2026-07-14 17:08:35 [INFO] uvicorn.error: connection open

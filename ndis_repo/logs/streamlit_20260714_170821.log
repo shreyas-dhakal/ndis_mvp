@@ -1,3 +1,0 @@
-2026-07-14 17:08:21 [INFO] root: Logging initialized
-2026-07-14 17:08:21 [INFO] httpx: HTTP Request: DELETE http://localhost:8000/documents/25 "HTTP/1.1 200 OK"
-2026-07-14 17:08:21 [INFO] httpx: HTTP Request: GET http://localhost:8000/documents "HTTP/1.1 200 OK"

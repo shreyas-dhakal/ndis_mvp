@@ -734,7 +734,7 @@ def answer_question(
     source_filter: str | None = None,
     record_type: str | None = None,
     alpha: float = 0.55,
-    context_mode: str = "snippet",
+    context_mode: str = "full",
 ) -> dict[str, Any]:
     candidate_ids = None
     name_like = _extract_name_like_query(query)
@@ -775,8 +775,10 @@ def answer_question(
         citation = chunk.get("citation") or {}
         context_piece = chunk.get("text") if context_mode == "full" else chunk.get("snippet")
         context_piece = (context_piece or chunk.get("text") or "").strip()
+        if context_mode != "full":
+            context_piece = context_piece[:800]
         context_lines.append(
-            f"[Chunk {index} | document_id={citation.get('document_id')} | section={citation.get('section')} | score={chunk.get('score')}]\n{context_piece[:800]}"
+            f"[Chunk {index} | document_id={citation.get('document_id')} | section={citation.get('section')} | score={chunk.get('score')}]\n{context_piece}"
         )
     context = "\n\n".join(context_lines)
 

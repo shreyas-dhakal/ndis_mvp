@@ -124,11 +124,20 @@ async def embed_texts_async(texts: list[str], *, model: str = OLLAMA_EMBED_MODEL
         raise EmbeddingUnavailable(f"Embedding service unavailable at {OLLAMA_BASE_URL}") from exc
 
 
-def chat_completion(messages: list[dict[str, str]], *, model: str = OLLAMA_CHAT_MODEL) -> str:
+def chat_completion(
+    messages: list[dict[str, str]],
+    *,
+    model: str = OLLAMA_CHAT_MODEL,
+    temperature: float | None = None,
+) -> str:
+    payload: dict[str, object] = {"model": model, "messages": messages, "stream": False}
+    if temperature is not None:
+        payload["options"] = {"temperature": float(temperature)}
+
     try:
         response = _sync_client().post(
             f"{OLLAMA_BASE_URL.rstrip('/')}/api/chat",
-            json={"model": model, "messages": messages, "stream": False},
+            json=payload,
         )
         response.raise_for_status()
     except httpx.HTTPError as exc:

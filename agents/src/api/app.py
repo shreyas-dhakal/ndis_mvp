@@ -3,7 +3,7 @@ import os
 import shutil
 import json
 
-from typing import Optional
+from typing import Any, Optional
 from langgraph.types import Command
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
@@ -13,12 +13,15 @@ from src.agent import get_workflow
 from src.agent import run_agent2
 from src.rag import (
     answer_question,
+    chat_completion,
     close_pool,
     delete_document,
     ensure_schema,
+    get_connection,
     get_pool,
     ingest_upload,
     list_documents,
+    OLLAMA_CHAT_MODEL,
     retrieve_chunks,
     store_generated_note,
 )
@@ -31,6 +34,50 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "generated_pdfs"
 spine_pool = get_pool()
 
 app = FastAPI(title="Agents MVP API")
+
+
+def load_model_registry() -> dict[str, str]:
+    raw = os.getenv("INFERENCE_MODEL_REGISTRY_JSON")
+    if not raw:
+        return {OLLAMA_CHAT_MODEL: OLLAMA_CHAT_MODEL}
+
+    parsed = json.loads(raw)
+    registry: dict[str, str] = {}
+    for public_name, cfg in parsed.items():
+        provider = (cfg or {}).get("provider")
+        model_id = (cfg or {}).get("model_id")
+        if provider != "ollama" or not model_id:
+            continue
+        registry[str(public_name)] = str(model_id)
+    return registry or {OLLAMA_CHAT_MODEL: OLLAMA_CHAT_MODEL}
+
+
+def resolve_inference_model(model: str) -> str:
+    registry = load_model_registry()
+    if model in registry:
+        return registry[model]
+    if model == OLLAMA_CHAT_MODEL:
+        return OLLAMA_CHAT_MODEL
+    return next(iter(registry.values()))
+
+
+def openai_chat_response(*, model: str, content: str) -> dict[str, Any]:
+    import time
+
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
 
 class TranscriptRequest(BaseModel):
     transcript:str
@@ -57,7 +104,19 @@ class RetrieveRequest(BaseModel):
 
 
 class AgentRequest(RetrieveRequest):
-    context_mode: str = "snippet"
+    context_mode: str = "full"
+
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionsRequest(BaseModel):
+    model: str
+    messages: list[ChatMessage]
+    temperature: float | None = None
+    stream: bool = False
 
 
 @app.on_event("startup")
@@ -103,6 +162,52 @@ async def build_done_response(result: dict, thread_id: str) -> dict:
 @app.get("/")
 def home():
     return {"message": "Agents MVP API"}
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/debug/stats")
+def debug_stats():
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            select
+              (select count(*) from documents) as documents_count,
+              (select count(*) from records) as records_count,
+              (select count(*) from chunks) as chunks_count
+            """
+        ).fetchone() or (0, 0, 0)
+    return {
+        "documents_count": int(row[0] or 0),
+        "records_count": int(row[1] or 0),
+        "chunks_count": int(row[2] or 0),
+    }
+
+
+@app.get("/v1/models")
+def list_models() -> dict[str, Any]:
+    registry = load_model_registry()
+    return {
+        "object": "list",
+        "data": [{"id": model_name} for model_name in registry],
+    }
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(req: ChatCompletionsRequest) -> dict[str, Any]:
+    if req.stream:
+        return openai_chat_response(model=req.model, content="Streaming not implemented")
+
+    model_id = resolve_inference_model(req.model)
+    content = chat_completion(
+        [m.model_dump() for m in req.messages],
+        model=model_id,
+        temperature=req.temperature,
+    )
+    return openai_chat_response(model=req.model, content=content)
 
 
 @app.get("/documents")

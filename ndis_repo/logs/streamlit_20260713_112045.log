@@ -1,5 +1,0 @@
-2026-07-13 11:20:45 [INFO] root: Logging initialized
-2026-07-13 11:21:37 [INFO] httpx: HTTP Request: POST http://localhost:8000/agent/answer "HTTP/1.1 200 OK"
-2026-07-13 15:11:35 [INFO] uvicorn.error: Shutting down
-2026-07-13 15:11:35 [INFO] uvicorn.error: Waiting for application shutdown.
-2026-07-13 15:11:35 [INFO] uvicorn.error: Application shutdown complete.

@@ -1,6 +1,8 @@
 # Agents MVP
 
-`agents/` is the merged MVP application.
+`agents/` is the single canonical application folder.
+
+It contains the full active application in one place.
 
 It combines:
 
@@ -10,6 +12,7 @@ It combines:
 - retrieval and grounded chat
 - one FastAPI backend
 - one React frontend
+- one optional Streamlit admin console
 - one PostgreSQL + pgvector database
 - local Ollama models for all LLM and embedding work
 
@@ -177,6 +180,12 @@ npm install
 npm run dev
 ```
 
+Optional Streamlit retrieval console:
+
+```bash
+streamlit run streamlit_rag_console.py
+```
+
 Frontend URL:
 
 ```text
@@ -265,6 +274,13 @@ You do not need:
 - `POST /retrieve`
 - `POST /agent/answer`
 - `POST /chat`
+
+### Utility Endpoints
+
+- `GET /health`
+- `GET /debug/stats`
+- `GET /v1/models`
+- `POST /v1/chat/completions`
 
 ## Database Commands
 

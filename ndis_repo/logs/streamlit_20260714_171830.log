@@ -1,4 +1,0 @@
-2026-07-14 17:18:30 [INFO] root: Logging initialized
-2026-07-14 17:18:30 [INFO] httpx: HTTP Request: DELETE http://localhost:8000/documents/29 "HTTP/1.1 200 OK"
-2026-07-14 17:18:30 [INFO] httpx: HTTP Request: GET http://localhost:8000/documents "HTTP/1.1 200 OK"
-2026-07-14 17:18:47 [INFO] uvicorn.access: ::1:56260 - "PUT /_stcore/upload_file/78ebd2e8-0448-4ca2-8f02-811bfb5de0bd/4fe2e5a2-69d1-41ac-ac36-9ec09221683a HTTP/1.1" 204

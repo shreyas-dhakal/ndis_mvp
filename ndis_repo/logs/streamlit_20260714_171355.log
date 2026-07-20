@@ -1,3 +1,0 @@
-2026-07-14 17:13:55 [INFO] root: Logging initialized
-2026-07-14 17:13:55 [INFO] uvicorn.access: ::1:54844 - "DELETE /_stcore/upload_file/6bc0f0e9-5264-4180-907a-84ced67df872/48d8efaf-01ba-4ef8-9077-958b256edfad HTTP/1.1" 204
-2026-07-14 17:14:04 [INFO] uvicorn.access: ::1:54847 - "PUT /_stcore/upload_file/6bc0f0e9-5264-4180-907a-84ced67df872/a70d2ff6-b090-43ef-b8b9-521aa30db1e6 HTTP/1.1" 204

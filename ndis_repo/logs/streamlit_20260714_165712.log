@@ -1,2 +1,0 @@
-2026-07-14 16:57:12 [INFO] root: Logging initialized
-2026-07-14 16:57:22 [INFO] uvicorn.access: ::1:54235 - "PUT /_stcore/upload_file/d0174989-28b6-4b02-8591-6ee0919934e5/c7fd97bb-fa90-4352-9d0c-b3e7af46a083 HTTP/1.1" 204
