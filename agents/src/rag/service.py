@@ -9,15 +9,35 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, UploadFile
+from pydantic import BaseModel
 from psycopg.rows import dict_row
 
+from src.agent.local_llm import invoke_structured
+
 from .chunking import ParsedRecord, chunk_text, classify_record_type
-from .db import get_connection
+from .db import (
+    age_available,
+    graph_entity_context,
+    get_connection,
+    sync_document_node,
+    sync_document_record_edge,
+    sync_entity_document_edge,
+    sync_entity_node,
+    sync_entity_record_edge,
+    sync_record_node,
+)
 from .embeddings import EmbeddingUnavailable, chat_completion, embed_query, embed_texts_async
 from .config import RETRIEVAL_LEXICAL_CANDIDATES, RETRIEVAL_RRF_K, RETRIEVAL_SEMANTIC_CANDIDATES
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
+
+
+class ExtractedEntity(BaseModel):
+    entity_name: str | None = None
+    entity_type: str = "person"
+    aliases: list[str] = []
+    confidence: str = "low"
 
 
 def _vector_literal(values: list[float]) -> str:
@@ -210,6 +230,252 @@ def _tokenize_terms(query: str) -> list[str]:
     return out
 
 
+def _split_aliases(entity_aliases: str | None) -> list[str]:
+    if not entity_aliases:
+        return []
+    seen: set[str] = set()
+    out: list[str] = []
+    for part in re.split(r"[,;\n]", entity_aliases):
+        alias = part.strip()
+        lowered = alias.lower()
+        if not alias or lowered in seen:
+            continue
+        seen.add(lowered)
+        out.append(alias)
+    return out
+
+
+def _normalise_entity_name(value: str | None) -> str | None:
+    cleaned = re.sub(r"\s+", " ", (value or "").strip())
+    if len(cleaned) < 3:
+        return None
+    if cleaned.lower() in {"participant", "client", "consumer", "person", "member", "provider", "organisation"}:
+        return None
+    return cleaned
+
+
+def _dedupe_aliases(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    aliases: list[str] = []
+    for value in values:
+        alias = _normalise_entity_name(value)
+        if not alias:
+            continue
+        lowered = alias.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        aliases.append(alias)
+    return aliases
+
+
+def _heuristic_entity_from_text(*, text: str, filename: str | None = None) -> ExtractedEntity | None:
+    patterns = [
+        (r"\b(?:participant|client|consumer|member)\s*(?:name)?\s*[:\-]\s*([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,3})", "person"),
+        (r"\b(?:ndis\s+plan|support\s+plan|service\s+agreement|care\s+plan|progress\s+note)\s+(?:for|of)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,3})", "person"),
+        (r"\b(?:provider|organisation|organization|company|agency)\s*(?:name)?\s*[:\-]\s*([A-Z][A-Za-z0-9&'\-]+(?:\s+[A-Z][A-Za-z0-9&'\-]+){0,5})", "org"),
+    ]
+    search_text = text[:5000]
+    for pattern, entity_type in patterns:
+        match = re.search(pattern, search_text)
+        if match:
+            name = _normalise_entity_name(match.group(1))
+            if name:
+                return ExtractedEntity(entity_name=name, entity_type=entity_type, aliases=[], confidence="medium")
+
+    if filename:
+        base = Path(filename).stem.replace("_", " ").replace("-", " ")
+        match = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2})\b", base)
+        if match:
+            name = _normalise_entity_name(match.group(1))
+            if name:
+                return ExtractedEntity(entity_name=name, entity_type="person", aliases=[], confidence="low")
+    return None
+
+
+def _llm_entity_from_text(*, text: str, filename: str | None = None) -> ExtractedEntity | None:
+    excerpt = text[:6000].strip()
+    if len(excerpt) < 80:
+        return None
+
+    prompt = f"""
+You are extracting the primary real-world entity that this NDIS document or note is mainly about.
+
+Rules:
+- Prefer the participant when the document is about one participant.
+- Use entity_type='org' only when the document is mainly about a provider, organisation, or business.
+- Return null for entity_name if the main entity is unclear or there are many unrelated entities.
+- Do not invent names.
+- aliases should only include clear alternate names already present in the text.
+- confidence must be one of: low, medium, high.
+
+Filename: {filename or 'unknown'}
+
+Document excerpt:
+{excerpt}
+"""
+    try:
+        extracted = invoke_structured(
+            ExtractedEntity,
+            system_prompt=(
+                "Extract the single primary entity from NDIS-related text. "
+                "Be conservative and return null when uncertain."
+            ),
+            user_prompt=prompt,
+        )
+    except Exception:
+        return None
+
+    entity_name = _normalise_entity_name(extracted.entity_name)
+    if not entity_name:
+        return None
+    aliases = [alias for alias in _dedupe_aliases(extracted.aliases) if alias.lower() != entity_name.lower()]
+    return ExtractedEntity(
+        entity_name=entity_name,
+        entity_type=extracted.entity_type if extracted.entity_type in {"person", "org"} else "person",
+        aliases=aliases,
+        confidence=extracted.confidence if extracted.confidence in {"low", "medium", "high"} else "low",
+    )
+
+
+def _extract_primary_entity(
+    *,
+    records: list[ParsedRecord],
+    filename: str | None,
+    entity_name: str | None,
+    entity_type: str,
+    entity_aliases: str | None,
+) -> tuple[str | None, str, str | None]:
+    manual_name = _normalise_entity_name(entity_name)
+    if manual_name:
+        aliases = _dedupe_aliases(_split_aliases(entity_aliases))
+        aliases = [alias for alias in aliases if alias.lower() != manual_name.lower()]
+        return manual_name, entity_type if entity_type in {"person", "org"} else "person", ", ".join(aliases) or None
+
+    combined_text = "\n\n".join(record.content for record in records[:6] if record.content).strip()
+    extracted = _heuristic_entity_from_text(text=combined_text, filename=filename) or _llm_entity_from_text(
+        text=combined_text,
+        filename=filename,
+    )
+    if not extracted or not extracted.entity_name:
+        return None, "person", None
+    aliases = [alias for alias in _dedupe_aliases(extracted.aliases) if alias.lower() != extracted.entity_name.lower()]
+    return extracted.entity_name, extracted.entity_type, ", ".join(aliases) or None
+
+
+def _extract_note_entity(note_dict: dict[str, Any], note_text: str) -> tuple[str | None, str, str | None]:
+    candidate_text = "\n\n".join(
+        value
+        for value in [
+            str(note_dict.get("participant_voice") or "").strip(),
+            str(note_dict.get("subjective") or "").strip(),
+            note_text.strip(),
+        ]
+        if value
+    )
+    extracted = _heuristic_entity_from_text(text=candidate_text) or _llm_entity_from_text(text=candidate_text)
+    if not extracted or not extracted.entity_name:
+        return None, "person", None
+    aliases = [alias for alias in _dedupe_aliases(extracted.aliases) if alias.lower() != extracted.entity_name.lower()]
+    return extracted.entity_name, extracted.entity_type, ", ".join(aliases) or None
+
+
+def _ensure_entity(
+    cur,
+    *,
+    entity_name: str | None,
+    entity_type: str = "person",
+    entity_aliases: str | None = None,
+) -> dict[str, Any] | None:
+    cleaned_name = (entity_name or "").strip()
+    if not cleaned_name:
+        return None
+
+    aliases = _split_aliases(entity_aliases)
+    search_terms = [cleaned_name, *aliases]
+    cur.execute(
+        """
+        select id, entity_type, display_name, aliases
+        from entities
+        where exists (
+            select 1
+            from unnest(%s::text[]) as search_term(term)
+            where lower(display_name) = lower(term)
+               or exists (
+                    select 1
+                    from unnest(aliases) as alias
+                    where lower(alias) = lower(term)
+               )
+        )
+        order by created_at asc
+        limit 1
+        """,
+        [search_terms],
+    )
+    row = cur.fetchone()
+    if row:
+        merged_aliases = []
+        seen = set()
+        for value in [row.get("display_name"), *(row.get("aliases") or []), cleaned_name, *aliases]:
+            if not value:
+                continue
+            lowered = str(value).lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            merged_aliases.append(str(value))
+        cur.execute(
+            "update entities set aliases = %s where id = %s",
+            [merged_aliases, row["id"]],
+        )
+        row["aliases"] = merged_aliases
+        return row
+
+    cur.execute(
+        """
+        insert into entities (entity_type, display_name, aliases)
+        values (%s, %s, %s)
+        returning id, entity_type, display_name, aliases
+        """,
+        [entity_type, cleaned_name, aliases],
+    )
+    return cur.fetchone()
+
+
+def _link_document_to_entity(
+    cur,
+    *,
+    entity_id: str,
+    document_id: str,
+    relation_type: str = "about",
+) -> None:
+    cur.execute(
+        """
+        insert into entity_documents (entity_id, document_id, relation_type)
+        values (%s, %s, %s)
+        on conflict (entity_id, document_id, relation_type) do nothing
+        """,
+        [entity_id, document_id, relation_type],
+    )
+
+
+def _link_record_to_entity(
+    cur,
+    *,
+    entity_id: str,
+    record_id: str,
+    relation_type: str = "about",
+) -> None:
+    cur.execute(
+        """
+        insert into entity_records (entity_id, record_id, relation_type)
+        values (%s, %s, %s)
+        on conflict (entity_id, record_id, relation_type) do nothing
+        """,
+        [entity_id, record_id, relation_type],
+    )
+
+
 def _make_snippet(text: str, query: str, *, radius: int = 180) -> tuple[str | None, list[str]]:
     text = text or ""
     terms = _tokenize_terms(query)
@@ -275,6 +541,9 @@ async def ingest_upload(
     source: str = "local",
     author: str = "user",
     doc_type: str = "document",
+    entity_name: str | None = None,
+    entity_type: str = "person",
+    entity_aliases: str | None = None,
 ) -> dict[str, Any]:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     file_bytes = await file.read()
@@ -290,6 +559,14 @@ async def ingest_upload(
     if not records:
         raise HTTPException(status_code=400, detail="No records could be derived from the uploaded file")
 
+    resolved_entity_name, resolved_entity_type, resolved_entity_aliases = _extract_primary_entity(
+        records=records,
+        filename=file.filename,
+        entity_name=entity_name,
+        entity_type=entity_type,
+        entity_aliases=entity_aliases,
+    )
+
     all_chunks = [chunk for record in records for chunk in record.chunks]
     embeddings: list[list[float] | None] = [None] * len(all_chunks)
     if all_chunks:
@@ -304,6 +581,14 @@ async def ingest_upload(
 
     with get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
+            entity_row = _ensure_entity(
+                cur,
+                entity_name=resolved_entity_name,
+                entity_type=resolved_entity_type,
+                entity_aliases=resolved_entity_aliases,
+            )
+            entity_id = str(entity_row["id"]) if entity_row else None
+
             cur.execute(
                 """
                 insert into documents (source, original_filename, mime_type, sha256, storage_path, metadata)
@@ -322,11 +607,31 @@ async def ingest_upload(
             document_row = cur.fetchone()
             document_id = str(document_row["id"])
 
+            if entity_id:
+                _link_document_to_entity(cur, entity_id=entity_id, document_id=document_id)
+
+            if entity_row:
+                sync_entity_node(
+                    conn,
+                    entity_id=entity_id,
+                    entity_type=entity_row["entity_type"],
+                    display_name=entity_row["display_name"],
+                )
+            sync_document_node(
+                conn,
+                document_id=document_id,
+                source=source,
+                original_filename=file.filename,
+            )
+            if entity_id:
+                sync_entity_document_edge(conn, entity_id=entity_id, document_id=document_id, relation_type="about")
+
             chunk_position = 0
             for record in records:
                 cur.execute(
                     """
                     insert into records (
+                        entity_id,
                         document_id,
                         record_type,
                         status,
@@ -342,6 +647,7 @@ async def ingest_upload(
                     values (
                         %s,
                         %s,
+                        %s,
                         'confirmed',
                         %s,
                         %s,
@@ -355,6 +661,7 @@ async def ingest_upload(
                     returning id
                     """,
                     [
+                        entity_id,
                         document_id,
                         record.record_type,
                         json.dumps(
@@ -375,6 +682,19 @@ async def ingest_upload(
                     ],
                 )
                 record_id = str(cur.fetchone()["id"])
+
+                if entity_id:
+                    _link_record_to_entity(cur, entity_id=entity_id, record_id=record_id)
+
+                sync_record_node(
+                    conn,
+                    record_id=record_id,
+                    record_type=record.record_type,
+                    title=record.title,
+                )
+                sync_document_record_edge(conn, document_id=document_id, record_id=record_id)
+                if entity_id:
+                    sync_entity_record_edge(conn, entity_id=entity_id, record_id=record_id, relation_type="about")
 
                 for chunk in record.chunks:
                     embedding = embeddings[chunk_position] if chunk_position < len(embeddings) else None
@@ -427,6 +747,13 @@ async def ingest_upload(
 
     return {
         "document_id": document_id,
+        "entity": {
+            "id": entity_id,
+            "display_name": entity_row["display_name"],
+            "entity_type": entity_row["entity_type"],
+        }
+        if entity_row
+        else None,
         "records_created": len(records),
         "chunks_created": len(all_chunks),
         "embedding_status": "ready" if any(embeddings) else "lexical_only",
@@ -444,6 +771,12 @@ def list_documents() -> list[dict[str, Any]]:
                   d.mime_type,
                   d.metadata->>'doc_type' as doc_type,
                   d.created_at,
+                  (
+                    select array_agg(distinct e.display_name order by e.display_name)
+                    from entity_documents ed
+                    join entities e on e.id = ed.entity_id
+                    where ed.document_id = d.id
+                  ) as entity_names,
                   (select count(*) from records r where r.document_id = d.id) as records_count,
                   (select count(*) from chunks c where c.document_id = d.id) as chunks_count
                 from documents d
@@ -460,6 +793,7 @@ def list_documents() -> list[dict[str, Any]]:
             "original_filename": row.get("original_filename"),
             "mime_type": row.get("mime_type"),
             "doc_type": row.get("doc_type"),
+            "entity_names": row.get("entity_names") or [],
             "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
             "records_count": int(row.get("records_count") or 0),
             "chunks_count": int(row.get("chunks_count") or 0),
@@ -587,7 +921,13 @@ def _fetch_chunk_payloads(chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
                   c.offset_end,
                   r.document_id,
                   r.title as record_title,
-                  r.provenance_pointer
+                  r.provenance_pointer,
+                  (
+                    select array_agg(distinct e.display_name order by e.display_name)
+                    from entity_records er
+                    join entities e on e.id = er.entity_id
+                    where er.record_id = r.id
+                  ) as entity_names
                 from chunks c
                 join records r on r.id = c.record_id
                 where c.id = any(%s::uuid[])
@@ -627,16 +967,186 @@ def lexical_candidate_ids(
             return [str(row["id"]) for row in cur.fetchall()]
 
 
+def _resolve_entity(*, query: str, entity_name: str | None = None) -> dict[str, Any] | None:
+    candidate = (entity_name or _extract_name_like_query(query) or "").strip()
+    if len(candidate) < 3:
+        return None
+
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                select
+                  e.id,
+                  e.entity_type,
+                  e.display_name,
+                  e.aliases,
+                  greatest(
+                    case when lower(e.display_name) = lower(%s) then 300 else 0 end,
+                    case when strpos(lower(%s), lower(e.display_name)) > 0 then 100 + length(e.display_name) else 0 end,
+                    coalesce(
+                        (
+                            select max(
+                                case
+                                    when lower(alias) = lower(%s) then 280
+                                    when strpos(lower(%s), lower(alias)) > 0 then 90 + length(alias)
+                                    else 0
+                                end
+                            )
+                            from unnest(e.aliases) as alias
+                        ),
+                        0
+                    )
+                  ) as score
+                from entities e
+                where lower(e.display_name) = lower(%s)
+                   or strpos(lower(%s), lower(e.display_name)) > 0
+                   or exists (
+                        select 1
+                        from unnest(e.aliases) as alias
+                        where lower(alias) = lower(%s)
+                           or strpos(lower(%s), lower(alias)) > 0
+                   )
+                order by score desc, e.created_at asc
+                limit 1
+                """,
+                [candidate, candidate, candidate, candidate, candidate, candidate, candidate, candidate],
+            )
+            row = cur.fetchone()
+    return row
+
+
+def _fallback_entity_context(entity_id: str) -> dict[str, list[str]]:
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                select distinct document_id
+                from entity_documents
+                where entity_id = %s
+                """,
+                [entity_id],
+            )
+            document_ids = [str(row["document_id"]) for row in cur.fetchall() if row.get("document_id")]
+            cur.execute(
+                """
+                with recursive related(record_id, depth) as (
+                    select er.record_id, 0
+                    from entity_records er
+                    where er.entity_id = %s
+                  union
+                    select
+                      case
+                        when l.from_record_id = related.record_id then l.to_record_id
+                        else l.from_record_id
+                      end,
+                      related.depth + 1
+                    from related
+                    join links l
+                      on l.from_record_id = related.record_id
+                      or l.to_record_id = related.record_id
+                    where related.depth < 2
+                )
+                select distinct record_id
+                from related
+                where record_id is not null
+                """,
+                [entity_id],
+            )
+            record_ids = [str(row["record_id"]) for row in cur.fetchall() if row.get("record_id")]
+    return {"document_ids": sorted(set(document_ids)), "record_ids": sorted(set(record_ids))}
+
+
+def _entity_context(entity_id: str) -> dict[str, list[str]]:
+    with get_connection() as conn:
+        if age_available(conn):
+            context = graph_entity_context(conn, entity_id)
+            if context.get("document_ids") or context.get("record_ids"):
+                return context
+    return _fallback_entity_context(entity_id)
+
+
+def _entity_candidate_chunk_ids(
+    *,
+    entity_id: str,
+    source_filter: str | None,
+    record_type: str | None,
+) -> list[str]:
+    context = _entity_context(entity_id)
+    document_ids = context.get("document_ids") or []
+    record_ids = context.get("record_ids") or []
+    if not document_ids and not record_ids:
+        return []
+
+    scope_clauses: list[str] = []
+    params: list[Any] = []
+    if record_ids:
+        scope_clauses.append("c.record_id = any(%s::uuid[])")
+        params.append(record_ids)
+    if document_ids:
+        scope_clauses.append("c.document_id = any(%s::uuid[])")
+        params.append(document_ids)
+
+    filters = ["(" + " or ".join(scope_clauses) + ")"]
+    if source_filter:
+        filters.append("c.chunk_metadata->>'source' = %s")
+        params.append(source_filter)
+    if record_type:
+        filters.append("c.record_type = %s")
+        params.append(record_type)
+
+    sql = f"""
+        select distinct c.id
+        from chunks c
+        where {' and '.join(filters)}
+        order by c.id
+        limit %s
+    """
+    params.append(max(RETRIEVAL_LEXICAL_CANDIDATES * 4, 240))
+
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql, params)
+            return [str(row["id"]) for row in cur.fetchall()]
+
+
+def _merge_candidate_chunk_ids(
+    base_ids: list[str] | None,
+    extra_ids: list[str] | None,
+) -> list[str] | None:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for chunk_id in [*(base_ids or []), *(extra_ids or [])]:
+        if chunk_id in seen:
+            continue
+        seen.add(chunk_id)
+        merged.append(chunk_id)
+    return merged or None
+
+
 def retrieve_chunks(
     *,
     query: str,
     top_k: int = 4,
     source_filter: str | None = None,
     record_type: str | None = None,
+    entity_name: str | None = None,
     alpha: float = 0.55,
     candidate_chunk_ids: list[str] | None = None,
     require_fts: bool = True,
 ) -> list[dict[str, Any]]:
+    entity_row = _resolve_entity(query=query, entity_name=entity_name)
+    entity_chunk_ids = (
+        _entity_candidate_chunk_ids(
+            entity_id=str(entity_row["id"]),
+            source_filter=source_filter,
+            record_type=record_type,
+        )
+        if entity_row
+        else None
+    )
+    candidate_chunk_ids = _merge_candidate_chunk_ids(candidate_chunk_ids, entity_chunk_ids)
+
     semantic_rows: list[dict[str, Any]] = []
     try:
         query_vec = embed_query(query)
@@ -697,6 +1207,7 @@ def retrieve_chunks(
                 "highlights": highlights,
                 "citation": {
                     "document_id": str(row["document_id"]) if row.get("document_id") else None,
+                    "entity_names": row.get("entity_names") or [],
                     "section": row.get("section"),
                     "offset_start": row.get("offset_start"),
                     "offset_end": row.get("offset_end"),
@@ -733,12 +1244,14 @@ def answer_question(
     top_k: int = 4,
     source_filter: str | None = None,
     record_type: str | None = None,
+    entity_name: str | None = None,
     alpha: float = 0.55,
     context_mode: str = "full",
 ) -> dict[str, Any]:
     candidate_ids = None
+    entity_row = _resolve_entity(query=query, entity_name=entity_name)
     name_like = _extract_name_like_query(query)
-    if name_like:
+    if name_like and not entity_row:
         candidate_ids = lexical_candidate_ids(
             query=name_like,
             top_k=min(15, top_k * 2),
@@ -751,6 +1264,7 @@ def answer_question(
         top_k=top_k,
         source_filter=source_filter,
         record_type=record_type,
+        entity_name=entity_name,
         alpha=alpha,
         candidate_chunk_ids=candidate_ids,
         require_fts=not bool(candidate_ids),
@@ -761,6 +1275,7 @@ def answer_question(
             top_k=top_k,
             source_filter=source_filter,
             record_type=record_type,
+            entity_name=entity_name,
             alpha=alpha,
         )
 
@@ -810,6 +1325,7 @@ def answer_question(
 
 async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tuple[str, str]:
     note_text = _note_text(note_dict)
+    resolved_entity_name, resolved_entity_type, resolved_entity_aliases = _extract_note_entity(note_dict, note_text)
     embedding = None
     if note_text.strip():
         try:
@@ -819,9 +1335,18 @@ async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tup
 
     with get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
+            entity_row = _ensure_entity(
+                cur,
+                entity_name=resolved_entity_name,
+                entity_type=resolved_entity_type,
+                entity_aliases=resolved_entity_aliases,
+            )
+            entity_id = str(entity_row["id"]) if entity_row else None
+
             cur.execute(
                 """
                 insert into records (
+                    entity_id,
                     record_type,
                     status,
                     body,
@@ -833,6 +1358,7 @@ async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tup
                     tsv
                 )
                 values (
+                    %s,
                     'note',
                     'confirmed',
                     %s,
@@ -846,6 +1372,7 @@ async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tup
                 returning id, created_at
                 """,
                 [
+                    entity_id,
                     json.dumps(note_dict),
                     f"thread:{thread_id}",
                     "Generated NDIS progress note",
@@ -857,6 +1384,22 @@ async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tup
             row = cur.fetchone()
             record_id = str(row["id"])
             created_at = row["created_at"].isoformat()
+            if entity_row:
+                sync_entity_node(
+                    conn,
+                    entity_id=entity_id,
+                    entity_type=entity_row["entity_type"],
+                    display_name=entity_row["display_name"],
+                )
+            sync_record_node(
+                conn,
+                record_id=record_id,
+                record_type="note",
+                title="Generated NDIS progress note",
+            )
+            if entity_id:
+                _link_record_to_entity(cur, entity_id=entity_id, record_id=record_id)
+                sync_entity_record_edge(conn, entity_id=entity_id, record_id=record_id, relation_type="about")
             if note_text.strip():
                 cur.execute(
                     """

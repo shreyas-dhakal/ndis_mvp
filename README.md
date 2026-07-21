@@ -13,7 +13,7 @@ It combines:
 - one FastAPI backend
 - one React frontend
 - one optional Streamlit admin console
-- one PostgreSQL + pgvector database
+- one PostgreSQL database with `pgvector` and Apache AGE
 - local Ollama models for all LLM and embedding work
 
 ## Local-Only Runtime
@@ -27,7 +27,7 @@ Local components:
 - retrieval chat: Ollama
 - embeddings: Ollama
 - audio transcription: `faster-whisper`
-- database: local Docker Postgres with `pgvector`
+- database: local Docker Postgres with `pgvector` and Apache AGE
 
 After the first run:
 
@@ -49,6 +49,7 @@ After the first run:
 
 - upload PDF, DOCX, TXT, CSV, and other supported files
 - extract text into records and chunks
+- automatically infer a primary participant or provider entity when possible
 - generate embeddings into the same database
 - query uploaded evidence through the Chat UI
 
@@ -65,6 +66,9 @@ The shared schema stores:
 - extracted records
 - retrieval chunks
 - vector embeddings
+- entity-document links
+- entity-record links
+- graph edges for entity-aware traversal
 - events and links
 
 There is no second retrieval database.
@@ -73,7 +77,7 @@ There is no second retrieval database.
 
 - Backend: FastAPI
 - Frontend: React + Vite
-- Database: PostgreSQL + pgvector
+- Database: PostgreSQL + pgvector + Apache AGE
 - LLM runtime: Ollama
 - Transcription: faster-whisper
 - Parsing: Docling
@@ -95,6 +99,8 @@ From `agents/`:
 ```bash
 docker compose up -d
 ```
+
+This now builds a local Postgres image with Apache AGE installed and starts Postgres with `shared_preload_libraries=age` so graph queries are available to the app.
 
 Check status:
 
@@ -146,6 +152,8 @@ DB_POOL_MAX_SIZE=8
 RETRIEVAL_SEMANTIC_CANDIDATES=60
 RETRIEVAL_LEXICAL_CANDIDATES=60
 RETRIEVAL_RRF_K=50
+AGE_ENABLED=true
+AGE_GRAPH_NAME=ndis_context
 ```
 
 For audio note generation, the UI's Whisper size choices map to local `faster-whisper` downloads.
@@ -158,6 +166,8 @@ uv sync
 ```
 
 ### 5. Start the backend
+
+From `agents/`:
 
 ```bash
 uv run uvicorn src.api.app:app --reload --port 8000
@@ -175,6 +185,8 @@ npm install
 ```
 
 ### 7. Start the frontend
+
+From `agents/frontend/`:
 
 ```bash
 npm run dev
@@ -246,6 +258,7 @@ You do not need:
 ### Documents Sidebar
 
 - upload files
+- optionally override the auto-detected participant or provider entity
 - list stored documents
 - remove documents
 
@@ -268,11 +281,11 @@ You do not need:
 ### Documents And Retrieval
 
 - `GET /documents`
-- `POST /documents`
+- `POST /documents` with automatic entity extraction and optional `entity_name`, `entity_type`, and `entity_aliases` overrides
 - `DELETE /documents/{document_id}`
-- `POST /ingest/file`
-- `POST /retrieve`
-- `POST /agent/answer`
+- `POST /ingest/file` with the same automatic extraction and optional override fields
+- `POST /retrieve` with optional `entity_name` filter
+- `POST /agent/answer` with optional `entity_name` filter
 - `POST /chat`
 
 ### Utility Endpoints

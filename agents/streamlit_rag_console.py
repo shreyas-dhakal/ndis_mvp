@@ -61,9 +61,17 @@ def ingest_file(
     source: str,
     author: str,
     doc_type: str,
+    entity_name: str | None,
+    entity_aliases: str | None,
 ) -> dict:
     url = f"{backend_base_url}/ingest/file"
-    data = {"source": source, "author": author, "doc_type": doc_type}
+    data = {
+        "source": source,
+        "author": author,
+        "doc_type": doc_type,
+        "entity_name": entity_name or "",
+        "entity_aliases": entity_aliases or "",
+    }
     files = {"file": (filename, file_bytes, content_type or "application/octet-stream")}
 
     try:
@@ -85,6 +93,7 @@ def retrieve(
     top_k: int,
     source_filter: str | None,
     record_type: str | None,
+    entity_name: str | None,
     alpha: float,
 ) -> list[dict]:
     url = f"{backend_base_url}/retrieve"
@@ -93,6 +102,7 @@ def retrieve(
         "top_k": top_k,
         "source_filter": source_filter,
         "record_type": record_type,
+        "entity_name": entity_name,
         "alpha": alpha,
     }
 
@@ -115,6 +125,7 @@ def agent_answer(
     top_k: int,
     source_filter: str | None,
     record_type: str | None,
+    entity_name: str | None,
     alpha: float,
     context_mode: str,
 ) -> dict:
@@ -124,6 +135,7 @@ def agent_answer(
         "top_k": top_k,
         "source_filter": source_filter,
         "record_type": record_type,
+        "entity_name": entity_name,
         "alpha": alpha,
         "context_mode": context_mode,
     }
@@ -185,6 +197,8 @@ def main() -> None:
     source = st.sidebar.text_input("Source", value="local")
     author = st.sidebar.text_input("Author", value="user")
     doc_type = st.sidebar.text_input("Doc type", value="document")
+    entity_name = st.sidebar.text_input("Entity name", value="")
+    entity_aliases = st.sidebar.text_input("Entity aliases", value="")
     if st.sidebar.button("Upload", use_container_width=True):
         if not uploaded:
             st.sidebar.error("Choose a file first.")
@@ -199,6 +213,8 @@ def main() -> None:
                         source=source,
                         author=author,
                         doc_type=doc_type,
+                        entity_name=entity_name.strip() or None,
+                        entity_aliases=entity_aliases.strip() or None,
                     )
                 except RuntimeError as exc:
                     st.sidebar.error(str(exc))
@@ -212,6 +228,7 @@ def main() -> None:
     alpha = st.sidebar.slider("Semantic weight", min_value=0.0, max_value=1.0, value=0.55)
     source_filter_v = st.sidebar.text_input("Source filter", value="").strip() or None
     record_type_v = st.sidebar.selectbox("Record type", [""] + RECORD_TYPES, index=0) or None
+    entity_filter_v = st.sidebar.text_input("Entity filter", value="").strip() or None
     use_agent = st.sidebar.checkbox("Use grounded agent", value=True)
     send_full_text = st.sidebar.checkbox("Send full chunk text to LLM", value=True)
 
@@ -293,6 +310,7 @@ def main() -> None:
                                 top_k=top_k,
                                 source_filter=source_filter_v,
                                 record_type=record_type_v,
+                                entity_name=entity_filter_v,
                                 alpha=alpha,
                                 context_mode=context_mode,
                             )
@@ -311,6 +329,7 @@ def main() -> None:
                                 top_k=top_k,
                                 source_filter=source_filter_v,
                                 record_type=record_type_v,
+                                entity_name=entity_filter_v,
                                 alpha=alpha,
                             )
                         except RuntimeError as exc:

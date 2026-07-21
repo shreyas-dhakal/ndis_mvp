@@ -2,9 +2,15 @@ version: "3.9"
 
 services:
   db:
-    image: pgvector/pgvector:pg16
+    build:
+      context: .
+      dockerfile: postgres.Dockerfile
     container_name: agents-postgres
     restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=age
     environment:
       POSTGRES_USER: langgraph
       POSTGRES_PASSWORD: langgraph123

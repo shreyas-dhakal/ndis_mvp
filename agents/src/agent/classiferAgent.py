@@ -10,6 +10,8 @@ from pydantic import BaseModel
 
 from langgraph.graph import END, START, StateGraph
 
+from src.rag.db import sync_record_link, sync_record_node
+
 from .local_llm import invoke_structured
 
 load_dotenv()
@@ -94,10 +96,21 @@ def create_task(state: ClassifierAgent) -> dict:
 
     conn_pool = state["conn_pool"]
     with conn_pool.connection() as conn:
-        workflow_id = conn.execute(
+        workflow_row = conn.execute(
             """
-            INSERT INTO records (record_type, status, body, source, author)
-            VALUES ('incident', 'draft', %(body)s, %(source)s, 'a2_agent')
+            INSERT INTO records (entity_id, document_id, record_type, status, body, source, author, title, content)
+            SELECT
+                source_record.entity_id,
+                source_record.document_id,
+                'incident',
+                'draft',
+                %(body)s,
+                %(source)s,
+                'a2_agent',
+                %(title)s,
+                %(content)s
+            FROM records AS source_record
+            WHERE source_record.id = %(source_record_id)s::uuid
             RETURNING id
             """,
             {
@@ -110,8 +123,19 @@ def create_task(state: ClassifierAgent) -> dict:
                     }
                 ),
                 "source": f"a2:{state['record_id']}",
+                "source_record_id": state["record_id"],
+                "title": f"Incident follow-up for {decision.trigger_id}",
+                "content": decision.evidence,
             },
-        ).fetchone()[0]
+        ).fetchone()
+        workflow_id = workflow_row[0]
+
+        sync_record_node(
+            conn,
+            record_id=str(workflow_id),
+            record_type="incident",
+            title=f"Incident follow-up for {decision.trigger_id}",
+        )
 
         conn.execute(
             """
@@ -119,6 +143,12 @@ def create_task(state: ClassifierAgent) -> dict:
             VALUES (%(from_id)s, %(to_id)s, 'triggered_by')
             """,
             {"from_id": str(workflow_id), "to_id": state["record_id"]},
+        )
+        sync_record_link(
+            conn,
+            from_record_id=str(workflow_id),
+            to_record_id=state["record_id"],
+            link_type="triggered_by",
         )
         conn.execute(
             """

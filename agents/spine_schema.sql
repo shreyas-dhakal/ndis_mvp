@@ -1,6 +1,15 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
 
+DO $$
+BEGIN
+    CREATE EXTENSION IF NOT EXISTS age;
+EXCEPTION
+    WHEN undefined_file OR feature_not_supported THEN
+        RAISE NOTICE 'Apache AGE is not installed in this Postgres runtime; graph retrieval stays disabled.';
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS entities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     entity_type TEXT NOT NULL CHECK (entity_type IN ('person', 'org')),
@@ -18,6 +27,16 @@ CREATE TABLE IF NOT EXISTS documents (
     storage_path TEXT,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS entity_documents (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL DEFAULT 'about',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (entity_id, document_id, relation_type)
 );
 
 CREATE TABLE IF NOT EXISTS records (
@@ -41,6 +60,16 @@ CREATE TABLE IF NOT EXISTS records (
     confirmed_by TEXT,
     actioned_at TIMESTAMPTZ,
     actioned_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS entity_records (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+    record_id UUID NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+    relation_type TEXT NOT NULL DEFAULT 'about',
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    UNIQUE (entity_id, record_id, relation_type)
 );
 
 ALTER TABLE records ADD COLUMN IF NOT EXISTS document_id UUID REFERENCES documents(id) ON DELETE CASCADE;
@@ -85,10 +114,15 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entity_documents_entity_id ON entity_documents (entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_documents_document_id ON entity_documents (document_id);
+CREATE INDEX IF NOT EXISTS idx_records_entity_id ON records (entity_id);
 CREATE INDEX IF NOT EXISTS idx_records_document_id ON records (document_id);
 CREATE INDEX IF NOT EXISTS idx_records_record_type ON records (record_type);
 CREATE INDEX IF NOT EXISTS idx_records_created_at ON records (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_records_tsv ON records USING GIN (tsv);
+CREATE INDEX IF NOT EXISTS idx_entity_records_entity_id ON entity_records (entity_id);
+CREATE INDEX IF NOT EXISTS idx_entity_records_record_id ON entity_records (record_id);
 CREATE INDEX IF NOT EXISTS idx_links_from_record_id ON links (from_record_id);
 CREATE INDEX IF NOT EXISTS idx_links_to_record_id ON links (to_record_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_record_id ON chunks (record_id);

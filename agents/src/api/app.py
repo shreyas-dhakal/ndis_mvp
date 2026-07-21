@@ -100,6 +100,7 @@ class RetrieveRequest(BaseModel):
     top_k: int = 4
     source_filter: Optional[str] = None
     record_type: Optional[str] = None
+    entity_name: Optional[str] = None
     alpha: float = 0.55
 
 
@@ -175,15 +176,17 @@ def debug_stats():
         row = conn.execute(
             """
             select
+              (select count(*) from entities) as entities_count,
               (select count(*) from documents) as documents_count,
               (select count(*) from records) as records_count,
               (select count(*) from chunks) as chunks_count
             """
-        ).fetchone() or (0, 0, 0)
+        ).fetchone() or (0, 0, 0, 0)
     return {
-        "documents_count": int(row[0] or 0),
-        "records_count": int(row[1] or 0),
-        "chunks_count": int(row[2] or 0),
+        "entities_count": int(row[0] or 0),
+        "documents_count": int(row[1] or 0),
+        "records_count": int(row[2] or 0),
+        "chunks_count": int(row[3] or 0),
     }
 
 
@@ -216,8 +219,24 @@ def get_documents():
 
 
 @app.post("/documents")
-async def upload_document(file: UploadFile = File(...)):
-    return await ingest_upload(file=file)
+async def upload_document(
+    file: UploadFile = File(...),
+    source: str = Form("local"),
+    author: str = Form("user"),
+    doc_type: str = Form("document"),
+    entity_name: str | None = Form(None),
+    entity_type: str = Form("person"),
+    entity_aliases: str | None = Form(None),
+):
+    return await ingest_upload(
+        file=file,
+        source=source,
+        author=author,
+        doc_type=doc_type,
+        entity_name=entity_name,
+        entity_type=entity_type,
+        entity_aliases=entity_aliases,
+    )
 
 
 @app.delete("/documents/{document_id}")
@@ -231,8 +250,19 @@ async def ingest_file(
     source: str = Form("local"),
     author: str = Form("user"),
     doc_type: str = Form("document"),
+    entity_name: str | None = Form(None),
+    entity_type: str = Form("person"),
+    entity_aliases: str | None = Form(None),
 ):
-    return await ingest_upload(file=file, source=source, author=author, doc_type=doc_type)
+    return await ingest_upload(
+        file=file,
+        source=source,
+        author=author,
+        doc_type=doc_type,
+        entity_name=entity_name,
+        entity_type=entity_type,
+        entity_aliases=entity_aliases,
+    )
 
 
 @app.post("/retrieve")
@@ -242,6 +272,7 @@ def retrieve(req: RetrieveRequest):
         top_k=req.top_k,
         source_filter=req.source_filter,
         record_type=req.record_type,
+        entity_name=req.entity_name,
         alpha=req.alpha,
     )
 
@@ -253,6 +284,7 @@ def agent_answer(req: AgentRequest):
         top_k=req.top_k,
         source_filter=req.source_filter,
         record_type=req.record_type,
+        entity_name=req.entity_name,
         alpha=req.alpha,
         context_mode=req.context_mode,
     )

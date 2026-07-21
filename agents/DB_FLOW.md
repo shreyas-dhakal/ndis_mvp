@@ -54,6 +54,10 @@ erDiagram
     RECORDS ||--o{ LINKS : to_record
     RECORDS ||--o{ EVENTS : audited_by
     ENTITIES ||--o{ RECORDS : owns
+    ENTITIES ||--o{ ENTITY_DOCUMENTS : tagged_to
+    ENTITIES ||--o{ ENTITY_RECORDS : tagged_to
+    DOCUMENTS ||--o{ ENTITY_DOCUMENTS : tagged_by
+    RECORDS ||--o{ ENTITY_RECORDS : tagged_by
 
     ENTITIES {
         uuid id PK
@@ -70,6 +74,15 @@ erDiagram
         text mime_type
         text sha256
         text storage_path
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    ENTITY_DOCUMENTS {
+        uuid id PK
+        uuid entity_id FK
+        uuid document_id FK
+        text relation_type
         jsonb metadata
         timestamptz created_at
     }
@@ -95,6 +108,15 @@ erDiagram
         text confirmed_by
         timestamptz actioned_at
         text actioned_by
+    }
+
+    ENTITY_RECORDS {
+        uuid id PK
+        uuid entity_id FK
+        uuid record_id FK
+        text relation_type
+        jsonb metadata
+        timestamptz created_at
     }
 
     CHUNKS {
@@ -137,9 +159,11 @@ erDiagram
 - `documents`: one row per uploaded source file.
 - `records`: the main normalized content table. This stores both ingested document records and generated operational records such as notes and incident tasks.
 - `chunks`: retrieval units for search and RAG. Each chunk belongs to a record and optionally to a document.
+- `entity_documents`: many-to-many entity tagging for uploaded source files.
+- `entity_records`: many-to-many entity tagging for normalized records.
 - `links`: explicit relationships between records. Currently used to link a generated incident task back to the source note via `triggered_by`.
 - `events`: append-only audit trail for task decisions and user actions.
-- `entities`: present in schema but not actively populated by the current code paths.
+- `entities`: participant or organisation nodes used for entity-aware retrieval and graph traversal.
 
 ## Write Flow 1: Document Ingestion
 
@@ -154,14 +178,20 @@ flowchart TD
     C --> D[Convert blocks to ParsedRecord objects]
     D --> E[Chunk each record]
     E --> F[Generate embeddings if available]
-    F --> G[Insert document row]
-    G --> H[Insert one records row per parsed block]
-    H --> I[Insert one chunks row per chunk]
-    I --> J[Commit transaction]
+    F --> G[Auto-detect primary entity from text unless user supplied one]
+    G --> H[Insert document row]
+    H --> I[Insert entity_documents link when entity supplied]
+    I --> J[Insert one records row per parsed block]
+    J --> K[Insert entity_records link per record when entity supplied]
+    K --> L[Insert one chunks row per chunk]
+    L --> M[Mirror entity, document, record, and edges into Apache AGE]
+    M --> N[Commit transaction]
 
-    G --> K[(documents)]
-    H --> L[(records)]
-    I --> M[(chunks)]
+    H --> O[(documents)]
+    J --> P[(records)]
+    L --> Q[(chunks)]
+    I --> R[(entity_documents)]
+    K --> S[(entity_records)]
 ```
 
 ### Ingest Writes
@@ -173,7 +203,17 @@ flowchart TD
   - `sha256`
   - `storage_path`
   - `metadata.doc_type`
+- `entities`
+  - `display_name`
+  - `entity_type`
+  - optional `aliases`
+  - auto-detected from the uploaded document when possible, otherwise user-supplied
+- `entity_documents`
+  - `entity_id`
+  - `document_id`
+  - `relation_type = about`
 - `records`
+  - `entity_id` when supplied on upload
   - `document_id`
   - `record_type`
   - `status = confirmed`
@@ -186,6 +226,10 @@ flowchart TD
   - `metadata.doc_type`
   - `metadata.ingest_source = upload`
   - `tsv`
+- `entity_records`
+  - `entity_id`
+  - `record_id`
+  - `relation_type = about`
 - `chunks`
   - `record_id`
   - `document_id`
@@ -225,26 +269,33 @@ Code path:
 
 ```mermaid
 flowchart TD
-    A[User query] --> B{Embedding available?}
-    B -->|Yes| C[Vector search on chunks.embedding]
-    B -->|No| D[Skip semantic search]
-    A --> E[FTS search on chunks.tsv]
-    C --> F[Fuse semantic and lexical scores]
-    D --> F
-    E --> F
-    F --> G[Fetch payload rows from chunks join records]
-    G --> H[Build snippets and citations]
-    H --> I[Optional LLM answer generation]
+    A[User query] --> B{Entity match from explicit filter or query text?}
+    B -->|Yes| C[Expand entity context through Apache AGE graph]
+    B -->|No| D[Skip graph expansion]
+    C --> E[Constrain candidate chunk ids to linked records and documents]
+    D --> E
+    E --> F{Embedding available?}
+    F -->|Yes| G[Vector search on chunks.embedding]
+    F -->|No| H[Skip semantic search]
+    E --> I[FTS search on chunks.tsv]
+    G --> J[Fuse semantic and lexical scores]
+    H --> J
+    I --> J
+    J --> K[Fetch payload rows from chunks join records]
+    K --> L[Build snippets and citations]
+    L --> M[Optional LLM answer generation]
 
-    C --> J[(chunks)]
-    E --> J
-    G --> J
-    G --> K[(records)]
+    C --> N[(Apache AGE)]
+    G --> O[(chunks)]
+    I --> O
+    K --> O
+    K --> P[(records)]
 ```
 
 ### Retrieval Reads
 
 - Search candidates come from `chunks`.
+- If an entity is resolved, candidate scope is expanded first via the graph and entity link tables.
 - Citation metadata is completed by joining `chunks.record_id -> records.id`.
 - `record_type`, `source`, and `candidate_chunk_ids` are used as optional filters.
 
@@ -283,6 +334,10 @@ flowchart TD
   - `metadata.origin = note_generator`
   - `metadata.thread_id`
   - `tsv`
+- `entities`
+  - auto-detected from the note text when a primary participant or provider can be inferred
+- Apache AGE
+  - mirrors the note as a `Record` node for later graph traversals
 - `chunks`
   - one chunk covering the flattened generated note text
   - `section = generated_note`
@@ -316,6 +371,7 @@ If the classifier matches a trigger:
 
 - `records`
   - `record_type = incident`
+  - inherits `entity_id` and `document_id` from the source note record when present
   - `status = draft`
   - `author = a2_agent`
   - `source = a2:<source_note_record_id>`
@@ -327,6 +383,9 @@ If the classifier matches a trigger:
   - `from_record_id = incident task`
   - `to_record_id = source note`
   - `link_type = triggered_by`
+- Apache AGE
+  - mirrors the incident as a `Record` node
+  - mirrors `triggered_by` as a `LINKED_TO` edge for multi-hop retrieval
 - `events`
   - `actor = a2_agent`
   - `action = a2.trigger_matched`

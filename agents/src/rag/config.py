@@ -31,6 +31,16 @@ EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 768)
 DB_POOL_MIN_SIZE = _env_int("DB_POOL_MIN_SIZE", 1)
 DB_POOL_MAX_SIZE = _env_int("DB_POOL_MAX_SIZE", 8)
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 RETRIEVAL_SEMANTIC_CANDIDATES = _env_int("RETRIEVAL_SEMANTIC_CANDIDATES", 60)
 RETRIEVAL_LEXICAL_CANDIDATES = _env_int("RETRIEVAL_LEXICAL_CANDIDATES", 60)
 RETRIEVAL_RRF_K = _env_int("RETRIEVAL_RRF_K", 50)
+
+AGE_ENABLED = _env_bool("AGE_ENABLED", True)
+AGE_GRAPH_NAME = _env("AGE_GRAPH_NAME", "ndis_context")
