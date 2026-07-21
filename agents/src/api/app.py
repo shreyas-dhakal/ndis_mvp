@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from src.agent import get_workflow
 from src.agent import run_agent2
+from src.project_guards import GuardValidationError
 from src.rag import (
     answer_question,
     chat_completion,
@@ -317,6 +318,8 @@ async def generate_from_audio(
             "whisper_model_size": whisper_model_size,
             "goals_context": "No goals provided."
         }, config=config)
+    except GuardValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -345,6 +348,8 @@ async def generate_from_text(request: TranscriptRequest):
             "transcript": request.transcript,
             "goals_context": "No goals provided."
         }, config=config)
+    except GuardValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -366,6 +371,8 @@ async def resume_review(payload: ResumeRequest):
 
     try:
         result = workflow.invoke(Command(resume=payload.feedback), config=config)
+    except GuardValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

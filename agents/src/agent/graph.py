@@ -1,6 +1,7 @@
 # Import Libraries:
 import os
 import uuid
+from datetime import date
 from pathlib import Path
 from typing import Literal, Optional, TypedDict
 
@@ -14,6 +15,7 @@ from langgraph.types import interrupt
 
 from .generate_pdf import soap_to_pdf
 from .local_llm import invoke_structured
+from src.project_guards import require_valid_input, require_valid_output
 
 load_dotenv()
 
@@ -142,6 +144,7 @@ def generate_progress_note(state: AgentState):
                 feedback=state["human_feedback"],
             ),
         )
+    require_valid_output(result, session_date=date.today(), label="generated progress note")
     return {"progress_note": result}
 
 
@@ -156,9 +159,12 @@ def human_review_node(state: AgentState) -> AgentState:
             "question": "Approve this NDIS Progress Note? Reply YES or provide correction.",
         }
     )
-    if feedback.strip().lower() in ("ok", "yes", "approved", "y"):
+    feedback_text = feedback if isinstance(feedback, str) else str(feedback or "")
+    normalized_feedback = feedback_text.strip()
+    if normalized_feedback.lower() in ("ok", "yes", "approved", "y"):
         return {"human_feedback": None}
-    return {"human_feedback": feedback.strip()}
+    require_valid_input(normalized_feedback, field_name="human feedback")
+    return {"human_feedback": normalized_feedback}
 
 
 def finalize_node(state: AgentState) -> AgentState:

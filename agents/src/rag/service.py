@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from psycopg.rows import dict_row
 
 from src.agent.local_llm import invoke_structured
+from src.project_guards import GuardValidationError, require_valid_input
 
 from .chunking import ParsedRecord, chunk_text, classify_record_type
 from .db import (
@@ -26,8 +27,17 @@ from .db import (
     sync_entity_record_edge,
     sync_record_node,
 )
-from .embeddings import EmbeddingUnavailable, chat_completion, embed_query, embed_texts_async
-from .config import RETRIEVAL_LEXICAL_CANDIDATES, RETRIEVAL_RRF_K, RETRIEVAL_SEMANTIC_CANDIDATES
+from .embeddings import (
+    EmbeddingUnavailable,
+    chat_completion,
+    embed_query,
+    embed_texts_async,
+)
+from .config import (
+    RETRIEVAL_LEXICAL_CANDIDATES,
+    RETRIEVAL_RRF_K,
+    RETRIEVAL_SEMANTIC_CANDIDATES,
+)
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
@@ -62,7 +72,9 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
     atomic_labels = {"table", "picture", "formula"}
     heading_labels = {"section_header", "title", "page_header"}
 
-    def flush(buffer_texts: list[str], title: str | None, section: str | None, page_no, ref):
+    def flush(
+        buffer_texts: list[str], title: str | None, section: str | None, page_no, ref
+    ):
         if not buffer_texts:
             return None
         merged = _normalise_text("\n".join(buffer_texts))
@@ -91,7 +103,13 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
             section = f"page_{page_no}" if page_no is not None else "unknown"
 
             if label_str in atomic_labels:
-                block = flush(buffer_texts, buffer_title, buffer_section, buffer_page_no, buffer_ref)
+                block = flush(
+                    buffer_texts,
+                    buffer_title,
+                    buffer_section,
+                    buffer_page_no,
+                    buffer_ref,
+                )
                 if block:
                     blocks.append(block)
                 buffer_texts, buffer_title = [], None
@@ -102,13 +120,16 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
                     except Exception:
                         text = getattr(item, "text", "") or ""
                 else:
-                    text = getattr(item, "text", "") or getattr(item, "caption", "") or ""
+                    text = (
+                        getattr(item, "text", "") or getattr(item, "caption", "") or ""
+                    )
 
                 text = _normalise_text(text)
                 if text:
                     blocks.append(
                         {
-                            "title": f"{label_str}" + (f" ({current_heading})" if current_heading else ""),
+                            "title": f"{label_str}"
+                            + (f" ({current_heading})" if current_heading else ""),
                             "text": text,
                             "section": section,
                             "provenance_pointer": f"docling://page/{page_no}/item/{item.self_ref}",
@@ -117,11 +138,19 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
                 continue
 
             if label_str in heading_labels:
-                block = flush(buffer_texts, buffer_title, buffer_section, buffer_page_no, buffer_ref)
+                block = flush(
+                    buffer_texts,
+                    buffer_title,
+                    buffer_section,
+                    buffer_page_no,
+                    buffer_ref,
+                )
                 if block:
                     blocks.append(block)
                 buffer_texts, buffer_title = [], None
-                current_heading = _normalise_text(getattr(item, "text", "") or "") or current_heading
+                current_heading = (
+                    _normalise_text(getattr(item, "text", "") or "") or current_heading
+                )
                 continue
 
             text = _normalise_text(getattr(item, "text", "") or "")
@@ -134,7 +163,9 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
             buffer_page_no = page_no
             buffer_ref = item.self_ref
 
-        block = flush(buffer_texts, buffer_title, buffer_section, buffer_page_no, buffer_ref)
+        block = flush(
+            buffer_texts, buffer_title, buffer_section, buffer_page_no, buffer_ref
+        )
         if block:
             blocks.append(block)
     except Exception:
@@ -166,7 +197,9 @@ def _extract_blocks(file_path: Path) -> list[dict[str, str | None]]:
     try:
         dl_document = DocumentConverter().convert(str(file_path)).document
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Document parsing failed: {exc}") from exc
+        raise HTTPException(
+            status_code=400, detail=f"Document parsing failed: {exc}"
+        ) from exc
 
     blocks = _parse_docling_document(dl_document)
     if blocks:
@@ -219,7 +252,20 @@ def _blocks_to_records(blocks: list[dict[str, str | None]]) -> list[ParsedRecord
 
 def _tokenize_terms(query: str) -> list[str]:
     terms = [value.lower() for value in re.split(r"\W+", query or "") if value.strip()]
-    stop_words = {"the", "and", "or", "to", "of", "in", "a", "an", "for", "is", "are", "be"}
+    stop_words = {
+        "the",
+        "and",
+        "or",
+        "to",
+        "of",
+        "in",
+        "a",
+        "an",
+        "for",
+        "is",
+        "are",
+        "be",
+    }
     out: list[str] = []
     seen: set[str] = set()
     for term in terms:
@@ -249,7 +295,15 @@ def _normalise_entity_name(value: str | None) -> str | None:
     cleaned = re.sub(r"\s+", " ", (value or "").strip())
     if len(cleaned) < 3:
         return None
-    if cleaned.lower() in {"participant", "client", "consumer", "person", "member", "provider", "organisation"}:
+    if cleaned.lower() in {
+        "participant",
+        "client",
+        "consumer",
+        "person",
+        "member",
+        "provider",
+        "organisation",
+    }:
         return None
     return cleaned
 
@@ -269,11 +323,22 @@ def _dedupe_aliases(values: list[str]) -> list[str]:
     return aliases
 
 
-def _heuristic_entity_from_text(*, text: str, filename: str | None = None) -> ExtractedEntity | None:
+def _heuristic_entity_from_text(
+    *, text: str, filename: str | None = None
+) -> ExtractedEntity | None:
     patterns = [
-        (r"\b(?:participant|client|consumer|member)\s*(?:name)?\s*[:\-]\s*([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,3})", "person"),
-        (r"\b(?:ndis\s+plan|support\s+plan|service\s+agreement|care\s+plan|progress\s+note)\s+(?:for|of)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,3})", "person"),
-        (r"\b(?:provider|organisation|organization|company|agency)\s*(?:name)?\s*[:\-]\s*([A-Z][A-Za-z0-9&'\-]+(?:\s+[A-Z][A-Za-z0-9&'\-]+){0,5})", "org"),
+        (
+            r"\b(?:participant|client|consumer|member)\s*(?:name)?\s*[:\-]\s*([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,3})",
+            "person",
+        ),
+        (
+            r"\b(?:ndis\s+plan|support\s+plan|service\s+agreement|care\s+plan|progress\s+note)\s+(?:for|of)\s+([A-Z][A-Za-z'\-]+(?:\s+[A-Z][A-Za-z'\-]+){0,3})",
+            "person",
+        ),
+        (
+            r"\b(?:provider|organisation|organization|company|agency)\s*(?:name)?\s*[:\-]\s*([A-Z][A-Za-z0-9&'\-]+(?:\s+[A-Z][A-Za-z0-9&'\-]+){0,5})",
+            "org",
+        ),
     ]
     search_text = text[:5000]
     for pattern, entity_type in patterns:
@@ -281,7 +346,12 @@ def _heuristic_entity_from_text(*, text: str, filename: str | None = None) -> Ex
         if match:
             name = _normalise_entity_name(match.group(1))
             if name:
-                return ExtractedEntity(entity_name=name, entity_type=entity_type, aliases=[], confidence="medium")
+                return ExtractedEntity(
+                    entity_name=name,
+                    entity_type=entity_type,
+                    aliases=[],
+                    confidence="medium",
+                )
 
     if filename:
         base = Path(filename).stem.replace("_", " ").replace("-", " ")
@@ -289,11 +359,15 @@ def _heuristic_entity_from_text(*, text: str, filename: str | None = None) -> Ex
         if match:
             name = _normalise_entity_name(match.group(1))
             if name:
-                return ExtractedEntity(entity_name=name, entity_type="person", aliases=[], confidence="low")
+                return ExtractedEntity(
+                    entity_name=name, entity_type="person", aliases=[], confidence="low"
+                )
     return None
 
 
-def _llm_entity_from_text(*, text: str, filename: str | None = None) -> ExtractedEntity | None:
+def _llm_entity_from_text(
+    *, text: str, filename: str | None = None
+) -> ExtractedEntity | None:
     excerpt = text[:6000].strip()
     if len(excerpt) < 80:
         return None
@@ -309,7 +383,7 @@ Rules:
 - aliases should only include clear alternate names already present in the text.
 - confidence must be one of: low, medium, high.
 
-Filename: {filename or 'unknown'}
+Filename: {filename or "unknown"}
 
 Document excerpt:
 {excerpt}
@@ -329,12 +403,20 @@ Document excerpt:
     entity_name = _normalise_entity_name(extracted.entity_name)
     if not entity_name:
         return None
-    aliases = [alias for alias in _dedupe_aliases(extracted.aliases) if alias.lower() != entity_name.lower()]
+    aliases = [
+        alias
+        for alias in _dedupe_aliases(extracted.aliases)
+        if alias.lower() != entity_name.lower()
+    ]
     return ExtractedEntity(
         entity_name=entity_name,
-        entity_type=extracted.entity_type if extracted.entity_type in {"person", "org"} else "person",
+        entity_type=extracted.entity_type
+        if extracted.entity_type in {"person", "org"}
+        else "person",
         aliases=aliases,
-        confidence=extracted.confidence if extracted.confidence in {"low", "medium", "high"} else "low",
+        confidence=extracted.confidence
+        if extracted.confidence in {"low", "medium", "high"}
+        else "low",
     )
 
 
@@ -350,20 +432,34 @@ def _extract_primary_entity(
     if manual_name:
         aliases = _dedupe_aliases(_split_aliases(entity_aliases))
         aliases = [alias for alias in aliases if alias.lower() != manual_name.lower()]
-        return manual_name, entity_type if entity_type in {"person", "org"} else "person", ", ".join(aliases) or None
+        return (
+            manual_name,
+            entity_type if entity_type in {"person", "org"} else "person",
+            ", ".join(aliases) or None,
+        )
 
-    combined_text = "\n\n".join(record.content for record in records[:6] if record.content).strip()
-    extracted = _heuristic_entity_from_text(text=combined_text, filename=filename) or _llm_entity_from_text(
+    combined_text = "\n\n".join(
+        record.content for record in records[:6] if record.content
+    ).strip()
+    extracted = _heuristic_entity_from_text(
+        text=combined_text, filename=filename
+    ) or _llm_entity_from_text(
         text=combined_text,
         filename=filename,
     )
     if not extracted or not extracted.entity_name:
         return None, "person", None
-    aliases = [alias for alias in _dedupe_aliases(extracted.aliases) if alias.lower() != extracted.entity_name.lower()]
+    aliases = [
+        alias
+        for alias in _dedupe_aliases(extracted.aliases)
+        if alias.lower() != extracted.entity_name.lower()
+    ]
     return extracted.entity_name, extracted.entity_type, ", ".join(aliases) or None
 
 
-def _extract_note_entity(note_dict: dict[str, Any], note_text: str) -> tuple[str | None, str, str | None]:
+def _extract_note_entity(
+    note_dict: dict[str, Any], note_text: str
+) -> tuple[str | None, str, str | None]:
     candidate_text = "\n\n".join(
         value
         for value in [
@@ -373,10 +469,16 @@ def _extract_note_entity(note_dict: dict[str, Any], note_text: str) -> tuple[str
         ]
         if value
     )
-    extracted = _heuristic_entity_from_text(text=candidate_text) or _llm_entity_from_text(text=candidate_text)
+    extracted = _heuristic_entity_from_text(
+        text=candidate_text
+    ) or _llm_entity_from_text(text=candidate_text)
     if not extracted or not extracted.entity_name:
         return None, "person", None
-    aliases = [alias for alias in _dedupe_aliases(extracted.aliases) if alias.lower() != extracted.entity_name.lower()]
+    aliases = [
+        alias
+        for alias in _dedupe_aliases(extracted.aliases)
+        if alias.lower() != extracted.entity_name.lower()
+    ]
     return extracted.entity_name, extracted.entity_type, ", ".join(aliases) or None
 
 
@@ -416,7 +518,12 @@ def _ensure_entity(
     if row:
         merged_aliases = []
         seen = set()
-        for value in [row.get("display_name"), *(row.get("aliases") or []), cleaned_name, *aliases]:
+        for value in [
+            row.get("display_name"),
+            *(row.get("aliases") or []),
+            cleaned_name,
+            *aliases,
+        ]:
             if not value:
                 continue
             lowered = str(value).lower()
@@ -476,7 +583,9 @@ def _link_record_to_entity(
     )
 
 
-def _make_snippet(text: str, query: str, *, radius: int = 180) -> tuple[str | None, list[str]]:
+def _make_snippet(
+    text: str, query: str, *, radius: int = 180
+) -> tuple[str | None, list[str]]:
     text = text or ""
     terms = _tokenize_terms(query)
     if not text.strip() or not terms:
@@ -557,21 +666,27 @@ async def ingest_upload(
     blocks = _extract_blocks(storage_path)
     records = _blocks_to_records(blocks)
     if not records:
-        raise HTTPException(status_code=400, detail="No records could be derived from the uploaded file")
+        raise HTTPException(
+            status_code=400, detail="No records could be derived from the uploaded file"
+        )
 
-    resolved_entity_name, resolved_entity_type, resolved_entity_aliases = _extract_primary_entity(
-        records=records,
-        filename=file.filename,
-        entity_name=entity_name,
-        entity_type=entity_type,
-        entity_aliases=entity_aliases,
+    resolved_entity_name, resolved_entity_type, resolved_entity_aliases = (
+        _extract_primary_entity(
+            records=records,
+            filename=file.filename,
+            entity_name=entity_name,
+            entity_type=entity_type,
+            entity_aliases=entity_aliases,
+        )
     )
 
     all_chunks = [chunk for record in records for chunk in record.chunks]
     embeddings: list[list[float] | None] = [None] * len(all_chunks)
     if all_chunks:
         try:
-            embedded = await embed_texts_async([chunk.chunk_text for chunk in all_chunks])
+            embedded = await embed_texts_async(
+                [chunk.chunk_text for chunk in all_chunks]
+            )
         except EmbeddingUnavailable:
             embedded = []
         if embedded:
@@ -608,7 +723,9 @@ async def ingest_upload(
             document_id = str(document_row["id"])
 
             if entity_id:
-                _link_document_to_entity(cur, entity_id=entity_id, document_id=document_id)
+                _link_document_to_entity(
+                    cur, entity_id=entity_id, document_id=document_id
+                )
 
             if entity_row:
                 sync_entity_node(
@@ -624,7 +741,12 @@ async def ingest_upload(
                 original_filename=file.filename,
             )
             if entity_id:
-                sync_entity_document_edge(conn, entity_id=entity_id, document_id=document_id, relation_type="about")
+                sync_entity_document_edge(
+                    conn,
+                    entity_id=entity_id,
+                    document_id=document_id,
+                    relation_type="about",
+                )
 
             chunk_position = 0
             for record in records:
@@ -684,7 +806,9 @@ async def ingest_upload(
                 record_id = str(cur.fetchone()["id"])
 
                 if entity_id:
-                    _link_record_to_entity(cur, entity_id=entity_id, record_id=record_id)
+                    _link_record_to_entity(
+                        cur, entity_id=entity_id, record_id=record_id
+                    )
 
                 sync_record_node(
                     conn,
@@ -692,12 +816,23 @@ async def ingest_upload(
                     record_type=record.record_type,
                     title=record.title,
                 )
-                sync_document_record_edge(conn, document_id=document_id, record_id=record_id)
+                sync_document_record_edge(
+                    conn, document_id=document_id, record_id=record_id
+                )
                 if entity_id:
-                    sync_entity_record_edge(conn, entity_id=entity_id, record_id=record_id, relation_type="about")
+                    sync_entity_record_edge(
+                        conn,
+                        entity_id=entity_id,
+                        record_id=record_id,
+                        relation_type="about",
+                    )
 
                 for chunk in record.chunks:
-                    embedding = embeddings[chunk_position] if chunk_position < len(embeddings) else None
+                    embedding = (
+                        embeddings[chunk_position]
+                        if chunk_position < len(embeddings)
+                        else None
+                    )
                     cur.execute(
                         """
                         insert into chunks (
@@ -794,7 +929,9 @@ def list_documents() -> list[dict[str, Any]]:
             "mime_type": row.get("mime_type"),
             "doc_type": row.get("doc_type"),
             "entity_names": row.get("entity_names") or [],
-            "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
+            "created_at": row["created_at"].isoformat()
+            if row.get("created_at")
+            else None,
             "records_count": int(row.get("records_count") or 0),
             "chunks_count": int(row.get("chunks_count") or 0),
         }
@@ -805,7 +942,10 @@ def list_documents() -> list[dict[str, Any]]:
 def delete_document(document_id: str) -> dict[str, Any]:
     with get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute("delete from documents where id = %s returning id, storage_path", [document_id])
+            cur.execute(
+                "delete from documents where id = %s returning id, storage_path",
+                [document_id],
+            )
             row = cur.fetchone()
             conn.commit()
 
@@ -866,7 +1006,15 @@ def _semantic_candidates(
     """
     with get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
-            cur.execute(sql, [_vector_literal(query_vec), *params, _vector_literal(query_vec), candidate_limit])
+            cur.execute(
+                sql,
+                [
+                    _vector_literal(query_vec),
+                    *params,
+                    _vector_literal(query_vec),
+                    candidate_limit,
+                ],
+            )
             return cur.fetchall()
 
 
@@ -894,7 +1042,7 @@ def _lexical_candidates(
     sql = f"""
         select c.id, ts_rank_cd(c.tsv, websearch_to_tsquery('english', %s)) as lex_rank
         from chunks c
-        where {' and '.join(clauses)}
+        where {" and ".join(clauses)}
         order by ts_rank_cd(c.tsv, websearch_to_tsquery('english', %s)) desc
         limit %s
     """
@@ -957,7 +1105,7 @@ def lexical_candidate_ids(
     sql = f"""
         select c.id
         from chunks c
-        where {' and '.join(clauses)}
+        where {" and ".join(clauses)}
         order by ts_rank_cd(c.tsv, plainto_tsquery('english', %s)) desc
         limit %s
     """
@@ -967,7 +1115,9 @@ def lexical_candidate_ids(
             return [str(row["id"]) for row in cur.fetchall()]
 
 
-def _resolve_entity(*, query: str, entity_name: str | None = None) -> dict[str, Any] | None:
+def _resolve_entity(
+    *, query: str, entity_name: str | None = None
+) -> dict[str, Any] | None:
     candidate = (entity_name or _extract_name_like_query(query) or "").strip()
     if len(candidate) < 3:
         return None
@@ -1010,7 +1160,16 @@ def _resolve_entity(*, query: str, entity_name: str | None = None) -> dict[str, 
                 order by score desc, e.created_at asc
                 limit 1
                 """,
-                [candidate, candidate, candidate, candidate, candidate, candidate, candidate, candidate],
+                [
+                    candidate,
+                    candidate,
+                    candidate,
+                    candidate,
+                    candidate,
+                    candidate,
+                    candidate,
+                    candidate,
+                ],
             )
             row = cur.fetchone()
     return row
@@ -1027,7 +1186,11 @@ def _fallback_entity_context(entity_id: str) -> dict[str, list[str]]:
                 """,
                 [entity_id],
             )
-            document_ids = [str(row["document_id"]) for row in cur.fetchall() if row.get("document_id")]
+            document_ids = [
+                str(row["document_id"])
+                for row in cur.fetchall()
+                if row.get("document_id")
+            ]
             cur.execute(
                 """
                 with recursive related(record_id, depth) as (
@@ -1053,8 +1216,13 @@ def _fallback_entity_context(entity_id: str) -> dict[str, list[str]]:
                 """,
                 [entity_id],
             )
-            record_ids = [str(row["record_id"]) for row in cur.fetchall() if row.get("record_id")]
-    return {"document_ids": sorted(set(document_ids)), "record_ids": sorted(set(record_ids))}
+            record_ids = [
+                str(row["record_id"]) for row in cur.fetchall() if row.get("record_id")
+            ]
+    return {
+        "document_ids": sorted(set(document_ids)),
+        "record_ids": sorted(set(record_ids)),
+    }
 
 
 def _entity_context(entity_id: str) -> dict[str, list[str]]:
@@ -1098,7 +1266,7 @@ def _entity_candidate_chunk_ids(
     sql = f"""
         select distinct c.id
         from chunks c
-        where {' and '.join(filters)}
+        where {" and ".join(filters)}
         order by c.id
         limit %s
     """
@@ -1145,7 +1313,9 @@ def retrieve_chunks(
         if entity_row
         else None
     )
-    candidate_chunk_ids = _merge_candidate_chunk_ids(candidate_chunk_ids, entity_chunk_ids)
+    candidate_chunk_ids = _merge_candidate_chunk_ids(
+        candidate_chunk_ids, entity_chunk_ids
+    )
 
     semantic_rows: list[dict[str, Any]] = []
     try:
@@ -1179,14 +1349,20 @@ def retrieve_chunks(
     fused_scores: dict[str, float] = {}
     for rank, row in enumerate(semantic_rows, start=1):
         chunk_id = str(row["id"])
-        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0.0) + _rrf(rank, weight=semantic_weight)
+        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0.0) + _rrf(
+            rank, weight=semantic_weight
+        )
     for rank, row in enumerate(lexical_rows, start=1):
         chunk_id = str(row["id"])
-        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0.0) + _rrf(rank, weight=lexical_weight)
+        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0.0) + _rrf(
+            rank, weight=lexical_weight
+        )
 
     chunk_ids = [
         chunk_id
-        for chunk_id, _score in sorted(fused_scores.items(), key=lambda item: item[1], reverse=True)[:top_k]
+        for chunk_id, _score in sorted(
+            fused_scores.items(), key=lambda item: item[1], reverse=True
+        )[:top_k]
     ]
     payloads = _fetch_chunk_payloads(chunk_ids)
 
@@ -1206,7 +1382,9 @@ def retrieve_chunks(
                 "snippet": snippet,
                 "highlights": highlights,
                 "citation": {
-                    "document_id": str(row["document_id"]) if row.get("document_id") else None,
+                    "document_id": str(row["document_id"])
+                    if row.get("document_id")
+                    else None,
                     "entity_names": row.get("entity_names") or [],
                     "section": row.get("section"),
                     "offset_start": row.get("offset_start"),
@@ -1248,6 +1426,11 @@ def answer_question(
     alpha: float = 0.55,
     context_mode: str = "full",
 ) -> dict[str, Any]:
+    try:
+        require_valid_input(query, field_name="question")
+    except GuardValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     candidate_ids = None
     entity_row = _resolve_entity(query=query, entity_name=entity_name)
     name_like = _extract_name_like_query(query)
@@ -1269,6 +1452,7 @@ def answer_question(
         candidate_chunk_ids=candidate_ids,
         require_fts=not bool(candidate_ids),
     )
+    print(f"-------------Retrieved chunks-----------/n {retrieved}")
     if candidate_ids and not retrieved:
         retrieved = retrieve_chunks(
             query=query,
@@ -1288,7 +1472,9 @@ def answer_question(
     context_lines: list[str] = []
     for index, chunk in enumerate(retrieved, start=1):
         citation = chunk.get("citation") or {}
-        context_piece = chunk.get("text") if context_mode == "full" else chunk.get("snippet")
+        context_piece = (
+            chunk.get("text") if context_mode == "full" else chunk.get("snippet")
+        )
         context_piece = (context_piece or chunk.get("text") or "").strip()
         if context_mode != "full":
             context_piece = context_piece[:800]
@@ -1317,15 +1503,22 @@ def answer_question(
         # Keep chat usable for demos even if the local chat model is offline.
         answer = "\n".join(
             ["Relevant evidence found:"]
-            + [f"- {(chunk.get('snippet') or chunk.get('text') or '').strip()}" for chunk in retrieved[:3]]
+            + [
+                f"- {(chunk.get('snippet') or chunk.get('text') or '').strip()}"
+                for chunk in retrieved[:3]
+            ]
         )
 
     return {"answer": answer, "retrieved_chunks": retrieved}
 
 
-async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tuple[str, str]:
+async def store_generated_note(
+    note_dict: dict[str, Any], thread_id: str
+) -> tuple[str, str]:
     note_text = _note_text(note_dict)
-    resolved_entity_name, resolved_entity_type, resolved_entity_aliases = _extract_note_entity(note_dict, note_text)
+    resolved_entity_name, resolved_entity_type, resolved_entity_aliases = (
+        _extract_note_entity(note_dict, note_text)
+    )
     embedding = None
     if note_text.strip():
         try:
@@ -1399,7 +1592,12 @@ async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tup
             )
             if entity_id:
                 _link_record_to_entity(cur, entity_id=entity_id, record_id=record_id)
-                sync_entity_record_edge(conn, entity_id=entity_id, record_id=record_id, relation_type="about")
+                sync_entity_record_edge(
+                    conn,
+                    entity_id=entity_id,
+                    record_id=record_id,
+                    relation_type="about",
+                )
             if note_text.strip():
                 cur.execute(
                     """
@@ -1432,7 +1630,12 @@ async def store_generated_note(note_dict: dict[str, Any], thread_id: str) -> tup
                         record_id,
                         len(note_text),
                         note_text,
-                        json.dumps({"source": f"thread:{thread_id}", "origin": "note_generator"}),
+                        json.dumps(
+                            {
+                                "source": f"thread:{thread_id}",
+                                "origin": "note_generator",
+                            }
+                        ),
                         _vector_literal(embedding) if embedding else None,
                         note_text,
                     ],
