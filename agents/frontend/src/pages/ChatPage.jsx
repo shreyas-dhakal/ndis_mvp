@@ -8,8 +8,16 @@ function SourceList({ sources }) {
     <div className="mt-2 space-y-2 border-t border-teal-100 pt-2">
       {sources.map((source) => (
         <div key={source.chunk_id} className="rounded-md bg-white/80 px-3 py-2 text-xs text-slate">
-          <div className="font-medium text-ink">
-            {source.citation?.record_title || source.record_type}
+          <div className="flex items-center gap-2 font-medium text-ink">
+            <span className="rounded bg-teal-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-teal-700">
+              {source.citation?.label || "Source"}
+            </span>
+            <span>{source.citation?.record_title || source.record_type}</span>
+          </div>
+          <div className="mt-1 text-[11px] text-slate/80">
+            {source.citation?.document_name || source.citation?.document_id || "Unknown document"}
+            {source.citation?.page_number ? ` • Page ${source.citation.page_number}` : ""}
+            {source.citation?.section ? ` • ${source.citation.section}` : ""}
           </div>
           <div className="mt-1">
             {source.snippet || source.text}

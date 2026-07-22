@@ -10,6 +10,7 @@ from psycopg_pool import ConnectionPool
 from .config import AGE_ENABLED, AGE_GRAPH_NAME, DATABASE_URL, DB_POOL_MAX_SIZE, DB_POOL_MIN_SIZE, EMBEDDING_DIM
 
 _pool: ConnectionPool | None = None
+_age_supported: bool | None = None
 
 
 def get_pool() -> ConnectionPool:
@@ -41,7 +42,10 @@ def _cypher_literal(value: Any) -> str:
 
 
 def _age_session_ready(conn) -> bool:
+    global _age_supported
     if not AGE_ENABLED:
+        return False
+    if _age_supported is False:
         return False
     with conn.cursor() as cur:
         cur.execute("SAVEPOINT age_session")
@@ -49,10 +53,12 @@ def _age_session_ready(conn) -> bool:
             cur.execute("LOAD 'age'")
             cur.execute('SET search_path = ag_catalog, "$user", public')
         except Exception:
+            _age_supported = False
             cur.execute("ROLLBACK TO SAVEPOINT age_session")
             cur.execute("RELEASE SAVEPOINT age_session")
             return False
         cur.execute("RELEASE SAVEPOINT age_session")
+    _age_supported = True
     return True
 
 

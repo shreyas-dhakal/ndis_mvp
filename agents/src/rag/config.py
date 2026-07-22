@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 
 from dotenv import load_dotenv
+from src.ai.config import EMBEDDING_DIM
 
 load_dotenv()
 
@@ -20,14 +21,6 @@ def _env_int(name: str, default: int) -> int:
 
 DATABASE_URL = _env("DATABASE_URL")
 
-OLLAMA_BASE_URL = _env("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_EMBED_MODEL = _env("OLLAMA_EMBED_MODEL", "nomic-embed-text")
-OLLAMA_CHAT_MODEL = _env("OLLAMA_CHAT_MODEL", "qwen3:8b")
-
-OLLAMA_EMBED_CONCURRENCY = _env_int("OLLAMA_EMBED_CONCURRENCY", 4)
-OLLAMA_EMBED_BATCH_SIZE = _env_int("OLLAMA_EMBED_BATCH_SIZE", 32)
-EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 768)
-
 DB_POOL_MIN_SIZE = _env_int("DB_POOL_MIN_SIZE", 1)
 DB_POOL_MAX_SIZE = _env_int("DB_POOL_MAX_SIZE", 8)
 
@@ -40,7 +33,10 @@ def _env_bool(name: str, default: bool) -> bool:
 
 RETRIEVAL_SEMANTIC_CANDIDATES = _env_int("RETRIEVAL_SEMANTIC_CANDIDATES", 60)
 RETRIEVAL_LEXICAL_CANDIDATES = _env_int("RETRIEVAL_LEXICAL_CANDIDATES", 60)
+RETRIEVAL_TRIGRAM_CANDIDATES = _env_int("RETRIEVAL_TRIGRAM_CANDIDATES", 40)
 RETRIEVAL_RRF_K = _env_int("RETRIEVAL_RRF_K", 50)
+RETRIEVAL_GROUP_LIMIT = _env_int("RETRIEVAL_GROUP_LIMIT", 12)
+RETRIEVAL_ADJACENT_WINDOW = _env_int("RETRIEVAL_ADJACENT_WINDOW", 1)
 
-AGE_ENABLED = _env_bool("AGE_ENABLED", True)
+AGE_ENABLED = _env_bool("AGE_ENABLED", False)
 AGE_GRAPH_NAME = _env("AGE_GRAPH_NAME", "ndis_context")

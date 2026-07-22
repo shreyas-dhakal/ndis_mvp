@@ -23,6 +23,7 @@ class ParsedRecord:
     content: str
     provenance_pointer: str | None
     section: str | None
+    metadata: dict
     chunks: list[ParsedChunk]
 
 
@@ -112,6 +113,9 @@ def chunk_text(
     section: str | None,
     provenance_pointer: str | None,
     title: str | None,
+    page_number: int | None = None,
+    heading_path: str | None = None,
+    parser_name: str | None = None,
 ) -> list[ParsedChunk]:
     max_tokens = 320 if record_type in {"goal", "plan"} else 520
     overlap_tokens = 60 if record_type in {"goal", "plan"} else 90
@@ -156,6 +160,9 @@ def chunk_text(
                             "block_section": section,
                             "block_title": title,
                             "provenance_pointer": provenance_pointer,
+                            "page_number": page_number,
+                            "heading_path": heading_path,
+                            "parser": parser_name,
                         },
                     )
                 )
@@ -177,6 +184,9 @@ def chunk_text(
                         "block_section": section,
                         "block_title": title,
                         "provenance_pointer": provenance_pointer,
+                        "page_number": page_number,
+                        "heading_path": heading_path,
+                        "parser": parser_name,
                     },
                 )
             )
