@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-_GUARDS_PATH = Path(__file__).resolve().parents[2] / "guards.py"
+_GUARDS_PATH = Path(__file__).resolve().parents[1] / "guards.py"
 _SPEC = importlib.util.spec_from_file_location("ndis_root_guards", _GUARDS_PATH)
 if _SPEC is None or _SPEC.loader is None:
     raise ImportError(f"Unable to load guards module from {_GUARDS_PATH}")
