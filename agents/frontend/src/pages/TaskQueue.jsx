@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { api } from "../lib/api.js";
 import DeadlineChip from "../components/DeadlineChip.jsx";
 
-function TaskList({ view, showApproveDismiss }) {
+function TaskList({ view, showApproveDismiss, highlightId }) {
   const [tasks, setTasks] = useState([]);
   const [error, setError] = useState(null);
   const [dismissingId, setDismissingId] = useState(null);
@@ -52,7 +53,13 @@ function TaskList({ view, showApproveDismiss }) {
   return (
     <div className="space-y-3">
       {tasks.map((task) => (
-        <div key={task.id} className="surface p-5">
+        <div
+          key={task.id}
+          id={`task-${task.id}`}
+          className={`surface p-5 ${
+            highlightId === task.id ? "border-teal-500 ring-2 ring-teal-500/30" : ""
+          }`}
+        >
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="mb-1 flex items-center gap-2 font-display font-semibold text-sm capitalize">
@@ -124,8 +131,17 @@ function TaskList({ view, showApproveDismiss }) {
 }
 
 export default function TaskQueue() {
-  const [tab, setTab] = useState("pending");
+  const [searchParams] = useSearchParams();
+  const initialView = searchParams.get("view");
+  const highlightId = searchParams.get("highlight");
+  const [tab, setTab] = useState(initialView === "confirmed" ? "confirmed" : "pending");
   const [pendingCount, setPendingCount] = useState(null);
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.getElementById(`task-${highlightId}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [tab, highlightId]);
 
   useEffect(() => {
     let active = true;
@@ -181,9 +197,9 @@ export default function TaskQueue() {
       </div>
 
       {tab === "pending" ? (
-        <TaskList view="pending" showApproveDismiss />
+        <TaskList view="pending" showApproveDismiss highlightId={highlightId} />
       ) : (
-        <TaskList view="confirmed" showApproveDismiss={false} />
+        <TaskList view="confirmed" showApproveDismiss={false} highlightId={highlightId} />
       )}
     </div>
   );
