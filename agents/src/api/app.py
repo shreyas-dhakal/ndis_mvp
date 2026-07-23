@@ -22,6 +22,7 @@ from src.rag import (
     get_connection,
     get_pool,
     ingest_upload,
+    find_entity_candidates,
     list_documents,
     retrieve_chunks,
     store_generated_note,
@@ -100,7 +101,11 @@ class TranscriptRequest(BaseModel):
 
 class ResumeRequest(BaseModel):
     thread_id: str
-    feedback: str 
+    feedback: str = ""
+    entity_confirmed: Optional[bool] = None
+    entity_name: Optional[str] = None
+    entity_id: Optional[str] = None
+    create_new_entity: bool = False
 
 class TaskActionRequest(BaseModel):
     reviewer: str = "unknown"
@@ -158,7 +163,13 @@ async def build_done_response(result: dict, thread_id: str) -> dict:
 
     if note_obj:
         note_dict = note_obj.model_dump()
-        record_id, record_timestamp = await store_generated_note(note_dict, thread_id)
+        record_id, record_timestamp = await store_generated_note(
+            note_dict,
+            thread_id,
+            entity_name=result.get("confirmed_entity_name"),
+            entity_id=result.get("confirmed_entity_id"),
+            create_new_entity=result.get("create_new_entity", False),
+        )
         try:
             a2_result = run_agent2(record_id, record_timestamp, note_dict, spine_pool)
             a2_task_created = bool(a2_result.get("workflow_id"))
@@ -172,8 +183,22 @@ async def build_done_response(result: dict, thread_id: str) -> dict:
         "final_response": result.get("final_response"),
         "pdf_path": result.get("pdf_path"),
         "note": note_obj.model_dump() if note_obj else None,
+        "entity_id": result.get("confirmed_entity_id"),
         "a2_task_created": a2_task_created,
         "a2_trigger_id": a2_trigger_id,
+    }
+
+
+def build_review_response(result: dict, interrupt_data: dict, thread_id: str) -> dict:
+    return {
+        "thread_id": thread_id,
+        "status": "awaiting_review",
+        "note": interrupt_data.get("note"),
+        "question": interrupt_data.get("question"),
+        "review_type": interrupt_data.get("type", "note_review"),
+        "entity_confirmation": interrupt_data if interrupt_data.get("type") == "entity_confirmation" else None,
+        "transcript": result.get("transcript"),
+        "transcript_lines": result.get("transcript_lines", []),
     }
 
 @app.get("/")
@@ -245,6 +270,10 @@ async def upload_document(
     entity_name: str | None = Form(None),
     entity_type: str = Form("person"),
     entity_aliases: str | None = Form(None),
+    confirmation_token: str | None = Form(None),
+    entity_confirmed: bool = Form(False),
+    entity_id: str | None = Form(None),
+    create_new_entity: bool = Form(False),
 ):
     return await ingest_upload(
         file=file,
@@ -254,6 +283,10 @@ async def upload_document(
         entity_name=entity_name,
         entity_type=entity_type,
         entity_aliases=entity_aliases,
+        confirmation_token=confirmation_token,
+        entity_confirmed=entity_confirmed,
+        entity_id=entity_id,
+        create_new_entity=create_new_entity,
     )
 
 
@@ -271,6 +304,10 @@ async def ingest_file(
     entity_name: str | None = Form(None),
     entity_type: str = Form("person"),
     entity_aliases: str | None = Form(None),
+    confirmation_token: str | None = Form(None),
+    entity_confirmed: bool = Form(False),
+    entity_id: str | None = Form(None),
+    create_new_entity: bool = Form(False),
 ):
     return await ingest_upload(
         file=file,
@@ -280,6 +317,10 @@ async def ingest_file(
         entity_name=entity_name,
         entity_type=entity_type,
         entity_aliases=entity_aliases,
+        confirmation_token=confirmation_token,
+        entity_confirmed=entity_confirmed,
+        entity_id=entity_id,
+        create_new_entity=create_new_entity,
     )
 
 
@@ -342,12 +383,7 @@ async def generate_from_audio(
 
     interrupt_data = extract_interrupt(result)
     if interrupt_data:
-        return {
-            "thread_id": thread_id,
-            "status": "awaiting_review",
-            "note": interrupt_data.get("note"),
-            "question": interrupt_data.get("question")
-        }
+        return build_review_response(result, interrupt_data, thread_id)
 
     return await build_done_response(result, thread_id)
 
@@ -372,12 +408,7 @@ async def generate_from_text(request: TranscriptRequest):
 
     interrupt_data = extract_interrupt(result)
     if interrupt_data:
-        return {
-            "thread_id": thread_id,
-            "status": "awaiting_review",
-            "note": interrupt_data.get("note"),
-            "question": interrupt_data.get("question")
-        }
+        return build_review_response(result, interrupt_data, thread_id)
 
     return await build_done_response(result, thread_id)
 
@@ -387,7 +418,15 @@ async def resume_review(payload: ResumeRequest):
     config = {"configurable": {"thread_id": payload.thread_id}}
 
     try:
-        result = workflow.invoke(Command(resume=payload.feedback), config=config)
+        resume_value: Any = payload.feedback
+        if payload.entity_confirmed is not None or payload.entity_name is not None:
+            resume_value = {
+                "confirmed": payload.entity_confirmed is True,
+                "entity_name": (payload.entity_name or "").strip(),
+                "entity_id": payload.entity_id,
+                "create_new_entity": payload.create_new_entity,
+            }
+        result = workflow.invoke(Command(resume=resume_value), config=config)
     except GuardValidationError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -395,12 +434,7 @@ async def resume_review(payload: ResumeRequest):
 
     interrupt_data = extract_interrupt(result)
     if interrupt_data:
-        return {
-            "thread_id": payload.thread_id,
-            "status": "awaiting_review",
-            "note": interrupt_data.get("note"),
-            "question": interrupt_data.get("question")
-        }
+        return build_review_response(result, interrupt_data, payload.thread_id)
 
     return await build_done_response(result, payload.thread_id)
 
