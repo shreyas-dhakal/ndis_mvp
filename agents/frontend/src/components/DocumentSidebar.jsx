@@ -8,6 +8,9 @@ export default function DocumentSidebar() {
   const [status, setStatus] = useState(null);
   const [entityName, setEntityName] = useState("");
   const [entityAliases, setEntityAliases] = useState("");
+  const [pendingEntity, setPendingEntity] = useState(null);
+  const [entityCorrection, setEntityCorrection] = useState("");
+  const [selectedEntityId, setSelectedEntityId] = useState("");
   const fileInputRef = useRef(null);
 
   const loadDocuments = async () => {
@@ -36,12 +39,43 @@ export default function DocumentSidebar() {
         if (entityName.trim()) formData.append("entity_name", entityName.trim());
         if (entityAliases.trim()) formData.append("entity_aliases", entityAliases.trim());
         const result = await api.postForm("/documents", formData);
+        if (result.status === "awaiting_entity_confirmation") {
+          setPendingEntity({ file, ...result });
+          setStatus(null);
+          return;
+        }
         setStatus(
           result.embedding_status === "lexical_only"
              ? `${file.name} added${result.entity?.display_name ? ` for ${result.entity.display_name}` : ""}. You can still find it by searching for words in the file.`
             : `${file.name} added${result.entity?.display_name ? ` for ${result.entity.display_name}` : ""}.`
         );
       }
+      await loadDocuments();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const confirmPendingEntity = async (confirmed, correctedName = "", createNew = false) => {
+    if (!pendingEntity) return;
+    setUploading(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", pendingEntity.file);
+      formData.append("confirmation_token", pendingEntity.confirmation_token);
+      formData.append("entity_confirmed", "true");
+      formData.append("entity_name", (confirmed ? pendingEntity.entity.display_name : correctedName).trim());
+      if (selectedEntityId) formData.append("entity_id", selectedEntityId);
+      formData.append("create_new_entity", createNew ? "true" : "false");
+      const result = await api.postForm("/documents", formData);
+      setStatus(`${pendingEntity.filename} added${result.entity?.display_name ? ` for ${result.entity.display_name}` : ""}.`);
+      setPendingEntity(null);
+      setEntityCorrection("");
+      setSelectedEntityId("");
       await loadDocuments();
     } catch (err) {
       setError(err.message);
@@ -102,6 +136,19 @@ export default function DocumentSidebar() {
 
       {status && (
         <p className="text-xs text-teal-700 mt-2">{status}</p>
+      )}
+
+      {pendingEntity && (
+        <div className="mt-3 rounded-md border border-ochre-200 bg-ochre-50 p-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-ochre-700">Confirm entity before ingesting</div>
+          <p className="mt-1 text-sm text-slate">Detected: <strong className="text-ink">{pendingEntity.entity.display_name || "No entity name detected"}</strong></p>
+          {pendingEntity.entity.candidates?.length > 0 && <div className="mt-2 space-y-2">{pendingEntity.entity.candidates.map((candidate) => <label key={candidate.id} className="flex cursor-pointer items-start gap-2 rounded bg-white p-2 text-xs"><input type="radio" name="upload-entity" checked={selectedEntityId === candidate.id} onChange={() => setSelectedEntityId(candidate.id)} /><span><strong className="text-ink">{candidate.display_name}</strong><br /><span className="font-mono text-slate">ID: {candidate.id}</span></span></label>)}</div>}
+          <div className="mt-2 flex flex-col gap-2">
+            <button type="button" onClick={() => selectedEntityId ? confirmPendingEntity(true) : setError("Select an existing entity or create a new one.")} disabled={uploading} className="rounded-md bg-teal-700 px-3 py-2 text-xs font-medium text-white disabled:opacity-50">Use selected entity</button>
+            <input value={entityCorrection} onChange={(e) => { setEntityCorrection(e.target.value); setSelectedEntityId(""); }} placeholder="New or corrected entity name" className="rounded-md border border-slate-200 px-2 py-2 text-sm" />
+            <button type="button" onClick={() => entityCorrection.trim() ? confirmPendingEntity(true, entityCorrection, true) : setError("Enter the new entity name.")} disabled={uploading} className="rounded-md border border-teal-500 px-3 py-2 text-xs font-medium text-teal-700 disabled:opacity-50">Create new entity</button>
+          </div>
+        </div>
       )}
 
       <ul className="mt-4 space-y-1 overflow-y-auto flex-1">

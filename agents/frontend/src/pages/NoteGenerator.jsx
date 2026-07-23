@@ -33,6 +33,10 @@ export default function NoteGenerator() {
   const [pdfPath, setPdfPath] = useState(null);
   const [a2, setA2] = useState({ created: false, triggerId: null });
   const [feedback, setFeedback] = useState("");
+  const [entityConfirmation, setEntityConfirmation] = useState(null);
+  const [entityCorrection, setEntityCorrection] = useState("");
+  const [selectedEntityId, setSelectedEntityId] = useState("");
+  const [transcript, setTranscript] = useState("");
   const [error, setError] = useState(null);
   const [recorderState, setRecorderState] = useState("idle");
   const [recordedAudio, setRecordedAudio] = useState(null);
@@ -79,6 +83,8 @@ export default function NoteGenerator() {
     try {
       const data = await request();
       setThreadId(data.thread_id ?? threadId); setStatus(data.status); setNote(data.note ?? null); setPdfPath(data.pdf_path ?? null);
+      setEntityConfirmation(data.entity_confirmation ?? null);
+      if (data.transcript) setTranscript(data.transcript);
       setA2({ created: data.a2_task_created ?? false, triggerId: data.a2_trigger_id ?? null });
     } catch (err) { setError(err.message); setStatus("idle"); }
   };
@@ -170,6 +176,13 @@ export default function NoteGenerator() {
   };
 
   const resume = (feedbackValue) => run(() => api.post("/generate/resume", { thread_id: threadId, feedback: feedbackValue }));
+  const confirmEntity = (confirmed, name = "", createNew = false) => run(() => api.post("/generate/resume", {
+    thread_id: threadId,
+    entity_confirmed: confirmed,
+    entity_name: name.trim(),
+    entity_id: selectedEntityId || null,
+    create_new_entity: createNew,
+  }));
 
   const reset = () => {
     clearTimer();
@@ -182,6 +195,10 @@ export default function NoteGenerator() {
     setPdfPath(null);
     setA2({ created: false, triggerId: null });
     setFeedback("");
+    setEntityConfirmation(null);
+    setEntityCorrection("");
+    setSelectedEntityId("");
+    setTranscript("");
     setError(null);
     setRecorderState("idle");
     setRecordingSeconds(0);
@@ -284,7 +301,7 @@ export default function NoteGenerator() {
         </div>
       </div>}
       {status === "loading" && <div className="surface flex min-h-[300px] flex-col items-center justify-center p-10 text-center"><div className="mb-5 h-12 w-12 animate-pulse rounded-2xl bg-lime-200" /><div className="font-display text-xl font-semibold">Making the record legible…</div><p className="mt-2 max-w-sm text-sm leading-6 text-slate">Caseload AI is listening for goals, outcomes, risks, and the participant's own voice.</p></div>}
-      {status === "awaiting_review" && note && <div className="surface p-5 md:p-8"><div className="mb-7 flex items-center justify-between"><div><div className="eyebrow mb-2">Draft ready</div><h2 className="font-display text-2xl font-semibold">Review the signal</h2></div><span className="rounded-full bg-ochre-50 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-ochre-600">Human review required</span></div><div className="grid gap-4 md:grid-cols-2">{FIELDS.map(([key, label]) => <div key={key}><div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate">{label}</div><div className="min-h-[3rem] rounded-xl bg-teal-50 p-3 text-sm leading-6">{note[key] || <span className="italic text-slate">Not documented</span>}</div></div>)}<div><div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate">Consent noted</div><div className="rounded-xl bg-teal-50 p-3 text-sm">{note.consent_noted === true ? "Yes" : note.consent_noted === false ? "No" : "Not documented"}</div></div></div><div className="mt-5"><div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate">Linked goals</div><div className="text-sm">{note.linked_goals?.length ? note.linked_goals.join(", ") : "None linked"}</div></div><hr className="my-6 border-line" /><div className="flex flex-col gap-3 md:flex-row md:items-start"><button onClick={() => resume("yes")} className="lime-button shrink-0 px-5 py-3 text-sm">Approve &amp; generate PDF</button><div className="flex flex-1 gap-2"><input value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Describe a change to the draft…" className="min-w-0 flex-1 rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-teal-500" /><button onClick={() => feedback.trim() ? resume(feedback) : setError("Please describe the changes, or use Approve.")} className="rounded-lg border border-teal-500 px-4 py-2 text-sm font-medium text-teal-700">Submit</button></div></div></div>}
+       {status === "awaiting_review" && (entityConfirmation || note) && <div className="surface p-5 md:p-8"><div className="mb-7 flex items-center justify-between"><div><div className="eyebrow mb-2">Human review</div><h2 className="font-display text-2xl font-semibold">Review the signal</h2></div><span className="rounded-full bg-ochre-50 px-3 py-1 font-mono text-[10px] uppercase tracking-wider text-ochre-600">Confirmation required</span></div>{transcript && <details className="mb-6 rounded-xl border border-line bg-paper p-4"><summary className="cursor-pointer text-sm font-semibold">View transcript</summary><pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate">{transcript}</pre></details>}{entityConfirmation && <div className="mb-6 rounded-2xl border border-ochre-200 bg-ochre-50 p-4"><div className="text-xs font-semibold uppercase tracking-wide text-ochre-700">Entity or patient</div><div className="mt-1 text-lg font-semibold text-ink">{entityConfirmation.entity_name || "No name detected"}</div><p className="mt-2 text-sm text-slate">Select the specific entity identifier. Same names are kept as separate entities.</p>{entityConfirmation.candidates?.length > 0 && <div className="mt-3 space-y-2">{entityConfirmation.candidates.map((candidate) => <label key={candidate.id} className="flex cursor-pointer items-start gap-2 rounded-lg bg-white p-2 text-xs"><input type="radio" name="audio-entity" checked={selectedEntityId === candidate.id} onChange={() => setSelectedEntityId(candidate.id)} /><span><strong className="text-ink">{candidate.display_name}</strong><br /><span className="font-mono text-slate">ID: {candidate.id}</span></span></label>)}</div>}<div className="mt-3 flex flex-col gap-2 sm:flex-row"><button onClick={() => selectedEntityId ? confirmEntity(true, entityConfirmation.entity_name || "") : setError("Select an existing entity or enter a new name.")} className="lime-button px-4 py-2 text-sm">Use selected entity</button><input value={entityCorrection} onChange={(e) => { setEntityCorrection(e.target.value); setSelectedEntityId(""); }} placeholder="New or corrected name" className="min-w-0 flex-1 rounded-lg border border-line bg-white px-3 py-2 text-sm outline-none focus:border-teal-500" /><button onClick={() => entityCorrection.trim() ? confirmEntity(true, entityCorrection, true) : setError("Enter the new entity name.")} className="rounded-lg border border-teal-500 px-4 py-2 text-sm font-medium text-teal-700">Create new entity</button></div></div>}{note && <><div className="grid gap-4 md:grid-cols-2">{FIELDS.map(([key, label]) => <div key={key}><div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate">{label}</div><div className="min-h-[3rem] rounded-xl bg-teal-50 p-3 text-sm leading-6">{note[key] || <span className="italic text-slate">Not documented</span>}</div></div>)}<div><div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate">Consent noted</div><div className="rounded-xl bg-teal-50 p-3 text-sm">{note.consent_noted === true ? "Yes" : note.consent_noted === false ? "No" : "Not documented"}</div></div></div><div className="mt-5"><div className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate">Linked goals</div><div className="text-sm">{note.linked_goals?.length ? note.linked_goals.join(", ") : "None linked"}</div></div><hr className="my-6 border-line" /><div className="flex flex-col gap-3 md:flex-row md:items-start"><button onClick={() => resume("yes")} disabled={Boolean(entityConfirmation)} className="lime-button shrink-0 px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50">Approve &amp; generate PDF</button><div className="flex flex-1 gap-2"><input value={feedback} onChange={(e) => setFeedback(e.target.value)} placeholder="Describe a change to the draft…" className="min-w-0 flex-1 rounded-lg border border-line px-3 py-2 text-sm outline-none focus:border-teal-500" /><button onClick={() => feedback.trim() ? resume(feedback) : setError("Please describe the changes, or use Approve.")} disabled={Boolean(entityConfirmation)} className="rounded-lg border border-teal-500 px-4 py-2 text-sm font-medium text-teal-700 disabled:opacity-50">Submit</button></div></div></>}</div>}
       {status === "done" && <div className="surface p-6 md:p-8"><div className="mb-5 rounded-xl bg-teal-50 px-4 py-3 text-sm font-medium text-teal-700">NDIS progress note approved and ready.</div>{a2.created && <div className="mb-5 rounded-xl bg-ochre-50 px-4 py-3 text-sm text-ochre-600">This note triggered a reportable-incident check: <strong className="font-mono">{a2.triggerId?.replace(/_/g, " ")}</strong>. A task has been created.</div>}{pdfPath ? <a href={`${BASE_URL}/download/pdf?path=${encodeURIComponent(pdfPath)}`} className="lime-button inline-block px-5 py-3 text-sm" download>Download PDF progress note ↗</a> : <p className="text-sm text-ochre-600">No PDF path was returned by the backend.</p>}<div className="mt-5"><button onClick={reset} className="text-sm text-slate underline underline-offset-2">Start a new note</button></div></div>}
     </div>
   );

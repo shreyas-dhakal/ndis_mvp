@@ -44,6 +44,7 @@ from .config import (
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
+_PENDING_INGESTS: dict[str, dict[str, Any]] = {}
 
 
 class ExtractedEntity(BaseModel):
@@ -51,6 +52,37 @@ class ExtractedEntity(BaseModel):
     entity_type: str = "person"
     aliases: list[str] = []
     confidence: str = "low"
+
+
+def find_entity_candidates(entity_name: str | None) -> list[dict[str, Any]]:
+    """Return possible existing entities without collapsing same-name entities."""
+    cleaned = (entity_name or "").strip()
+    if not cleaned:
+        return []
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                select id, entity_type, display_name, aliases
+                from entities
+                where lower(display_name) = lower(%s)
+                   or exists (
+                       select 1 from unnest(aliases) as alias
+                       where lower(alias) = lower(%s)
+                   )
+                order by created_at asc
+                """,
+                [cleaned, cleaned],
+            )
+            return [
+                {
+                    "id": str(row["id"]),
+                    "entity_type": row["entity_type"],
+                    "display_name": row["display_name"],
+                    "aliases": row.get("aliases") or [],
+                }
+                for row in cur.fetchall()
+            ]
 
 
 def _vector_literal(values: list[float]) -> str:
@@ -523,12 +555,36 @@ def _ensure_entity(
     entity_name: str | None,
     entity_type: str = "person",
     entity_aliases: str | None = None,
+    entity_id: str | None = None,
+    create_new: bool = False,
 ) -> dict[str, Any] | None:
     cleaned_name = (entity_name or "").strip()
     if not cleaned_name:
         return None
 
     aliases = _split_aliases(entity_aliases)
+    if entity_id:
+        cur.execute(
+            "select id, entity_type, display_name, aliases from entities where id = %s",
+            [entity_id],
+        )
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=400, detail="Selected entity does not exist")
+        merged_aliases = _dedupe_aliases([*(row.get("aliases") or []), cleaned_name, *aliases])
+        cur.execute("update entities set aliases = %s where id = %s", [merged_aliases, entity_id])
+        row["aliases"] = merged_aliases
+        return row
+    if create_new:
+        cur.execute(
+            """
+            insert into entities (entity_type, display_name, aliases)
+            values (%s, %s, %s)
+            returning id, entity_type, display_name, aliases
+            """,
+            [entity_type, cleaned_name, aliases],
+        )
+        return cur.fetchone()
     search_terms = [cleaned_name, *aliases]
     cur.execute(
         """
@@ -719,9 +775,24 @@ async def ingest_upload(
     entity_name: str | None = None,
     entity_type: str = "person",
     entity_aliases: str | None = None,
+    confirmation_token: str | None = None,
+    entity_confirmed: bool = False,
+    entity_id: str | None = None,
+    create_new_entity: bool = False,
 ) -> dict[str, Any]:
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    file_bytes = await file.read()
+    pending = _PENDING_INGESTS.pop(confirmation_token, None) if confirmation_token else None
+    if pending:
+        file_bytes = pending["file_bytes"]
+        entity_name = entity_name or pending.get("entity_name")
+        entity_type = entity_type or pending.get("entity_type", "person")
+        entity_aliases = entity_aliases or pending.get("entity_aliases")
+        entity_id = entity_id or pending.get("entity_id")
+        source = pending.get("source", source)
+        author = pending.get("author", author)
+        doc_type = pending.get("doc_type", doc_type)
+    else:
+        file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
@@ -769,6 +840,33 @@ async def ingest_upload(
         )
     )
 
+    if not entity_confirmed and not confirmation_token and not entity_id:
+        token = uuid.uuid4().hex
+        _PENDING_INGESTS[token] = {
+            "file_bytes": file_bytes,
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "entity_name": resolved_entity_name,
+            "entity_type": resolved_entity_type,
+            "entity_aliases": resolved_entity_aliases,
+            "candidates": find_entity_candidates(resolved_entity_name),
+            "source": source,
+            "author": author,
+            "doc_type": doc_type,
+        }
+        storage_path.unlink(missing_ok=True)
+        return {
+            "status": "awaiting_entity_confirmation",
+            "confirmation_token": token,
+            "entity": {
+                "display_name": resolved_entity_name,
+                "entity_type": resolved_entity_type,
+                "aliases": resolved_entity_aliases,
+                "candidates": _PENDING_INGESTS[token]["candidates"],
+            },
+            "filename": file.filename,
+        }
+
     all_chunks = [chunk for record in records for chunk in record.chunks]
     embeddings: list[list[float] | None] = [None] * len(all_chunks)
     if all_chunks:
@@ -788,6 +886,8 @@ async def ingest_upload(
                 entity_name=resolved_entity_name,
                 entity_type=resolved_entity_type,
                 entity_aliases=resolved_entity_aliases,
+                entity_id=entity_id,
+                create_new=create_new_entity,
             )
             entity_id = str(entity_row["id"]) if entity_row else None
 
@@ -1830,12 +1930,21 @@ def answer_question(
 
 
 async def store_generated_note(
-    note_dict: dict[str, Any], thread_id: str
+    note_dict: dict[str, Any],
+    thread_id: str,
+    entity_name: str | None = None,
+    entity_id: str | None = None,
+    create_new_entity: bool = False,
 ) -> tuple[str, str]:
     note_text = _note_text(note_dict)
-    resolved_entity_name, resolved_entity_type, resolved_entity_aliases = (
-        _extract_note_entity(note_dict, note_text)
-    )
+    if entity_name and entity_name.strip():
+        resolved_entity_name, resolved_entity_type, resolved_entity_aliases = (
+            entity_name.strip(), "person", None
+        )
+    else:
+        resolved_entity_name, resolved_entity_type, resolved_entity_aliases = (
+            _extract_note_entity(note_dict, note_text)
+        )
     embedding = None
     if note_text.strip():
         try:
@@ -1847,10 +1956,12 @@ async def store_generated_note(
         with conn.cursor(row_factory=dict_row) as cur:
             entity_row = _ensure_entity(
                 cur,
-                entity_name=resolved_entity_name,
-                entity_type=resolved_entity_type,
-                entity_aliases=resolved_entity_aliases,
-            )
+            entity_name=resolved_entity_name,
+            entity_type=resolved_entity_type,
+            entity_aliases=resolved_entity_aliases,
+            entity_id=entity_id,
+            create_new=create_new_entity,
+        )
             entity_id = str(entity_row["id"]) if entity_row else None
 
             cur.execute(
