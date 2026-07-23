@@ -1,4 +1,4 @@
-from .config import OLLAMA_CHAT_MODEL
+from src.ai.config import DEFAULT_CHAT_MODEL
 from .db import close_pool, ensure_schema, get_connection, get_pool
 from .embeddings import chat_completion
 from .service import (
@@ -20,7 +20,7 @@ __all__ = [
     "get_pool",
     "ingest_upload",
     "list_documents",
-    "OLLAMA_CHAT_MODEL",
+    "DEFAULT_CHAT_MODEL",
     "retrieve_chunks",
     "store_generated_note",
 ]

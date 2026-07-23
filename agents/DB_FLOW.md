@@ -184,8 +184,7 @@ flowchart TD
     I --> J[Insert one records row per parsed block]
     J --> K[Insert entity_records link per record when entity supplied]
     K --> L[Insert one chunks row per chunk]
-    L --> M[Mirror entity, document, record, and edges into Apache AGE]
-    M --> N[Commit transaction]
+    L --> M[Commit transaction]
 
     H --> O[(documents)]
     J --> P[(records)]
@@ -270,24 +269,26 @@ Code path:
 ```mermaid
 flowchart TD
     A[User query] --> B{Entity match from explicit filter or query text?}
-    B -->|Yes| C[Expand entity context through Apache AGE graph]
-    B -->|No| D[Skip graph expansion]
+    B -->|Yes| C[Expand entity context through relational entity links]
+    B -->|No| D[Skip entity context expansion]
     C --> E[Constrain candidate chunk ids to linked records and documents]
     D --> E
     E --> F{Embedding available?}
     F -->|Yes| G[Vector search on chunks.embedding]
     F -->|No| H[Skip semantic search]
     E --> I[FTS search on chunks.tsv]
-    G --> J[Fuse semantic and lexical scores]
+    E --> I2[Trigram search on chunk text and titles]
+    G --> J[Fuse semantic, lexical, and trigram scores]
     H --> J
     I --> J
-    J --> K[Fetch payload rows from chunks join records]
-    K --> L[Build snippets and citations]
+    I2 --> J
+    J --> K[Group evidence and fetch payload rows]
+    K --> L[Expand adjacent chunks and build citations]
     L --> M[Optional LLM answer generation]
 
-    C --> N[(Apache AGE)]
     G --> O[(chunks)]
     I --> O
+    I2 --> O
     K --> O
     K --> P[(records)]
 ```
@@ -295,9 +296,10 @@ flowchart TD
 ### Retrieval Reads
 
 - Search candidates come from `chunks`.
-- If an entity is resolved, candidate scope is expanded first via the graph and entity link tables.
+- If an entity is resolved, candidate scope is expanded first via entity link tables.
 - Citation metadata is completed by joining `chunks.record_id -> records.id`.
 - `record_type`, `source`, and `candidate_chunk_ids` are used as optional filters.
+- Adjacent chunk expansion is used to create fuller evidence windows.
 
 ## Write Flow 2: Note Generation
 
@@ -336,8 +338,6 @@ flowchart TD
   - `tsv`
 - `entities`
   - auto-detected from the note text when a primary participant or provider can be inferred
-- Apache AGE
-  - mirrors the note as a `Record` node for later graph traversals
 - `chunks`
   - one chunk covering the flattened generated note text
   - `section = generated_note`
@@ -383,9 +383,6 @@ If the classifier matches a trigger:
   - `from_record_id = incident task`
   - `to_record_id = source note`
   - `link_type = triggered_by`
-- Apache AGE
-  - mirrors the incident as a `Record` node
-  - mirrors `triggered_by` as a `LINKED_TO` edge for multi-hop retrieval
 - `events`
   - `actor = a2_agent`
   - `action = a2.trigger_matched`

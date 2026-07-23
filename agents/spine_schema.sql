@@ -1,5 +1,6 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 DO $$
 BEGIN
@@ -114,6 +115,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents (created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_documents_sha256_unique ON documents (sha256) WHERE sha256 IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_entity_documents_entity_id ON entity_documents (entity_id);
 CREATE INDEX IF NOT EXISTS idx_entity_documents_document_id ON entity_documents (document_id);
 CREATE INDEX IF NOT EXISTS idx_records_entity_id ON records (entity_id);
@@ -121,12 +123,23 @@ CREATE INDEX IF NOT EXISTS idx_records_document_id ON records (document_id);
 CREATE INDEX IF NOT EXISTS idx_records_record_type ON records (record_type);
 CREATE INDEX IF NOT EXISTS idx_records_created_at ON records (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_records_tsv ON records USING GIN (tsv);
+CREATE INDEX IF NOT EXISTS idx_records_title_trgm ON records USING GIN (title gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_entity_records_entity_id ON entity_records (entity_id);
 CREATE INDEX IF NOT EXISTS idx_entity_records_record_id ON entity_records (record_id);
 CREATE INDEX IF NOT EXISTS idx_links_from_record_id ON links (from_record_id);
 CREATE INDEX IF NOT EXISTS idx_links_to_record_id ON links (to_record_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_record_id ON chunks (record_id);
+CREATE INDEX IF NOT EXISTS idx_chunks_record_chunk_index ON chunks (record_id, chunk_index);
 CREATE INDEX IF NOT EXISTS idx_chunks_document_id ON chunks (document_id);
 CREATE INDEX IF NOT EXISTS idx_chunks_record_type ON chunks (record_type);
 CREATE INDEX IF NOT EXISTS idx_chunks_tsv ON chunks USING GIN (tsv);
-CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_chunks_text_trgm ON chunks USING GIN (chunk_text gin_trgm_ops);
+DO $$
+BEGIN
+    IF {{EMBEDDING_DIM}} <= 2000 THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS idx_chunks_embedding ON chunks USING hnsw (embedding vector_cosine_ops)';
+    ELSE
+        RAISE NOTICE 'Skipping ANN index on chunks.embedding because vector dimensions (%) exceed pgvector index limits for vector; retrieval will use sequential vector scan unless dimensions are reduced.', {{EMBEDDING_DIM}};
+    END IF;
+END
+$$;

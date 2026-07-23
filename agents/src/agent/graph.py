@@ -13,6 +13,8 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
+from src.ai.config import VOICE_PROVIDER
+from src.ai.runtime import transcribe_audio_file
 from .generate_pdf import soap_to_pdf
 from .local_llm import invoke_structured
 from src.project_guards import require_valid_input, require_valid_output
@@ -80,42 +82,17 @@ Previous NDIS Progress Note:
 Apply this feedback and generate an improved version:
 {feedback}
 """
-
-
-def _format_timestamp(seconds: float) -> str:
-    minutes, seconds = divmod(int(seconds), 60)
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-
-
 def transcribe_audio(state: AgentState) -> dict:
     audio_path = state.get("audio_path")
     if not audio_path:
         return {}
 
-    from faster_whisper import WhisperModel
-
-    model = WhisperModel(
-        state.get("whisper_model_size", "small"),
-        device="cpu",
-        compute_type="int8",
+    model_override = (
+        state.get("whisper_model_size", "small")
+        if VOICE_PROVIDER == "faster_whisper"
+        else None
     )
-    segments, _info = model.transcribe(audio_path, vad_filter=True)
-
-    lines = [
-        {
-            "speaker": "SPEAKER_00",
-            "start": float(segment.start),
-            "text": (segment.text or "").strip(),
-        }
-        for segment in segments
-        if (segment.text or "").strip()
-    ]
-
-    transcript_text = "\n".join(
-        f"[{_format_timestamp(line['start'])}] {line['speaker']}: {line['text']}"
-        for line in lines
-    )
+    transcript_text, lines = transcribe_audio_file(audio_path, model=model_override)
     return {"transcript": transcript_text, "transcript_lines": lines}
 
 
@@ -202,7 +179,11 @@ def build_graph():
     graph.add_conditional_edges("human_review_node", check_humanfb)
     graph.add_edge("finalize_node", END)
 
-    pool = ConnectionPool(conn_string, kwargs={"autocommit": True, "row_factory": None})
+    pool = ConnectionPool(
+        conn_string,
+        check=ConnectionPool.check_connection,
+        kwargs={"autocommit": True, "row_factory": None, "prepare_threshold": None},
+    )
     checkpointer = PostgresSaver(pool)
     checkpointer.setup()
     return graph.compile(checkpointer=checkpointer)

@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from src.agent import get_workflow
 from src.agent import run_agent2
+from src.ai.config import DEFAULT_CHAT_MODEL, DEFAULT_CHAT_TARGET, ModelTarget, normalize_provider
 from src.project_guards import GuardValidationError
 from src.rag import (
     answer_question,
@@ -22,7 +23,6 @@ from src.rag import (
     get_pool,
     ingest_upload,
     list_documents,
-    OLLAMA_CHAT_MODEL,
     retrieve_chunks,
     store_generated_note,
 )
@@ -37,29 +37,44 @@ spine_pool = get_pool()
 app = FastAPI(title="Agents MVP API")
 
 
-def load_model_registry() -> dict[str, str]:
+def _default_model_registry() -> dict[str, ModelTarget]:
+    return {DEFAULT_CHAT_MODEL: DEFAULT_CHAT_TARGET}
+
+
+def load_model_registry() -> dict[str, ModelTarget]:
     raw = os.getenv("INFERENCE_MODEL_REGISTRY_JSON")
     if not raw:
-        return {OLLAMA_CHAT_MODEL: OLLAMA_CHAT_MODEL}
+        return _default_model_registry()
 
     parsed = json.loads(raw)
-    registry: dict[str, str] = {}
+    registry: dict[str, ModelTarget] = {}
     for public_name, cfg in parsed.items():
-        provider = (cfg or {}).get("provider")
-        model_id = (cfg or {}).get("model_id")
-        if provider != "ollama" or not model_id:
+        if not isinstance(cfg, dict):
             continue
-        registry[str(public_name)] = str(model_id)
-    return registry or {OLLAMA_CHAT_MODEL: OLLAMA_CHAT_MODEL}
+        model_name = str(cfg.get("model") or cfg.get("model_id") or public_name).strip()
+        if not model_name:
+            continue
+        registry[str(public_name)] = ModelTarget(
+            provider=normalize_provider(cfg.get("provider"), default=DEFAULT_CHAT_TARGET.provider),
+            model=model_name,
+            deployment=str(
+                cfg.get("deployment")
+                or cfg.get("deployment_id")
+                or cfg.get("model_id")
+                or model_name
+            ).strip(),
+        )
+    return registry or _default_model_registry()
 
 
-def resolve_inference_model(model: str) -> str:
+def resolve_inference_model(model: str) -> ModelTarget:
     registry = load_model_registry()
-    if model in registry:
-        return registry[model]
-    if model == OLLAMA_CHAT_MODEL:
-        return OLLAMA_CHAT_MODEL
-    return next(iter(registry.values()))
+    selected = registry.get(model)
+    if selected is None and model == DEFAULT_CHAT_MODEL:
+        selected = registry.get(DEFAULT_CHAT_MODEL)
+    if selected is None:
+        selected = next(iter(registry.values()))
+    return selected
 
 
 def openai_chat_response(*, model: str, content: str) -> dict[str, Any]:
@@ -205,10 +220,12 @@ def chat_completions(req: ChatCompletionsRequest) -> dict[str, Any]:
     if req.stream:
         return openai_chat_response(model=req.model, content="Streaming not implemented")
 
-    model_id = resolve_inference_model(req.model)
+    target = resolve_inference_model(req.model)
     content = chat_completion(
         [m.model_dump() for m in req.messages],
-        model=model_id,
+        model=target.model,
+        provider=target.provider,
+        deployment=target.deployment,
         temperature=req.temperature,
     )
     return openai_chat_response(model=req.model, content=content)

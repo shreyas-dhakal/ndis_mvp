@@ -13,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from src.rag.db import sync_record_link, sync_record_node
 
 from .local_llm import invoke_structured
+from .task_triggers import detect_rule_based_trigger
 
 load_dotenv()
 
@@ -73,6 +74,17 @@ Note to classify (JSON):
 
 def make_decision(state: ClassifierAgent):
     note = state.get("note")
+    rule_based_trigger = detect_rule_based_trigger(note)
+    if rule_based_trigger is not None:
+        trigger_id, evidence = rule_based_trigger
+        return {
+            "decision": DecisionOutput(
+                trigger_id=trigger_id,
+                task_result=True,
+                evidence=evidence,
+            )
+        }
+
     taxonomy = load_taxonomy()
     prompt = build_classification_prompt(taxonomy, note)
     result = invoke_structured(

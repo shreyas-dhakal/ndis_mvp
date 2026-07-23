@@ -34,9 +34,12 @@ from .embeddings import (
     embed_texts_async,
 )
 from .config import (
+    RETRIEVAL_ADJACENT_WINDOW,
+    RETRIEVAL_GROUP_LIMIT,
     RETRIEVAL_LEXICAL_CANDIDATES,
     RETRIEVAL_RRF_K,
     RETRIEVAL_SEMANTIC_CANDIDATES,
+    RETRIEVAL_TRIGRAM_CANDIDATES,
 )
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -73,7 +76,12 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
     heading_labels = {"section_header", "title", "page_header"}
 
     def flush(
-        buffer_texts: list[str], title: str | None, section: str | None, page_no, ref
+        buffer_texts: list[str],
+        title: str | None,
+        section: str | None,
+        page_no,
+        ref,
+        heading_path: str | None,
     ):
         if not buffer_texts:
             return None
@@ -85,6 +93,9 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
             "text": merged,
             "section": section,
             "provenance_pointer": f"docling://page/{page_no}/item/{ref}",
+            "page_number": int(page_no) if page_no is not None else None,
+            "heading_path": heading_path,
+            "parser": "docling",
         }
 
     try:
@@ -109,6 +120,7 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
                     buffer_section,
                     buffer_page_no,
                     buffer_ref,
+                    current_heading,
                 )
                 if block:
                     blocks.append(block)
@@ -133,6 +145,9 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
                             "text": text,
                             "section": section,
                             "provenance_pointer": f"docling://page/{page_no}/item/{item.self_ref}",
+                            "page_number": int(page_no) if page_no is not None else None,
+                            "heading_path": current_heading,
+                            "parser": "docling",
                         }
                     )
                 continue
@@ -144,6 +159,7 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
                     buffer_section,
                     buffer_page_no,
                     buffer_ref,
+                    current_heading,
                 )
                 if block:
                     blocks.append(block)
@@ -164,7 +180,12 @@ def _parse_docling_document(dl_document) -> list[dict[str, str | None]]:
             buffer_ref = item.self_ref
 
         block = flush(
-            buffer_texts, buffer_title, buffer_section, buffer_page_no, buffer_ref
+            buffer_texts,
+            buffer_title,
+            buffer_section,
+            buffer_page_no,
+            buffer_ref,
+            current_heading,
         )
         if block:
             blocks.append(block)
@@ -183,6 +204,9 @@ def _extract_blocks(file_path: Path) -> list[dict[str, str | None]]:
                 "text": plain_text,
                 "section": "full",
                 "provenance_pointer": "file://full",
+                "page_number": None,
+                "heading_path": file_path.stem,
+                "parser": "plaintext",
             }
         ]
 
@@ -218,6 +242,9 @@ def _extract_blocks(file_path: Path) -> list[dict[str, str | None]]:
                         "text": _normalise_text(str(value)),
                         "section": "full",
                         "provenance_pointer": "docling://document",
+                        "page_number": None,
+                        "heading_path": file_path.stem,
+                        "parser": f"docling_{method}",
                     }
                 ]
 
@@ -238,12 +265,20 @@ def _blocks_to_records(blocks: list[dict[str, str | None]]) -> list[ParsedRecord
                 content=content,
                 provenance_pointer=block.get("provenance_pointer"),
                 section=block.get("section"),
+                metadata={
+                    "page_number": block.get("page_number"),
+                    "heading_path": block.get("heading_path"),
+                    "parser": block.get("parser") or "unknown",
+                },
                 chunks=chunk_text(
                     content,
                     record_type=record_type,
                     section=block.get("section"),
                     provenance_pointer=block.get("provenance_pointer"),
                     title=block.get("title"),
+                    page_number=block.get("page_number"),
+                    heading_path=block.get("heading_path"),
+                    parser_name=block.get("parser"),
                 ),
             )
         )
@@ -644,6 +679,37 @@ def _note_text(note_dict: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _existing_document_by_sha256(sha256: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                select
+                  d.id,
+                  d.created_at,
+                  d.original_filename,
+                  d.metadata,
+                  (
+                    select count(*) from records r where r.document_id = d.id
+                  ) as records_count,
+                  (
+                    select count(*) from chunks c where c.document_id = d.id
+                  ) as chunks_count,
+                  (
+                    select array_agg(distinct e.display_name order by e.display_name)
+                    from entity_documents ed
+                    join entities e on e.id = ed.entity_id
+                    where ed.document_id = d.id
+                  ) as entity_names
+                from documents d
+                where d.sha256 = %s
+                limit 1
+                """,
+                [sha256],
+            )
+            return cur.fetchone()
+
+
 async def ingest_upload(
     *,
     file: UploadFile,
@@ -662,6 +728,29 @@ async def ingest_upload(
     storage_name = f"{uuid.uuid4().hex}_{file.filename}"
     storage_path = UPLOADS_DIR / storage_name
     storage_path.write_bytes(file_bytes)
+
+    sha256 = hashlib.sha256(file_bytes).hexdigest()
+    existing_document = _existing_document_by_sha256(sha256)
+    if existing_document:
+        if storage_path.exists():
+            storage_path.unlink(missing_ok=True)
+        return {
+            "document_id": str(existing_document["id"]),
+            "records_created": 0,
+            "chunks_created": 0,
+            "embedding_status": "existing",
+            "duplicate": True,
+            "existing_document": {
+                "document_id": str(existing_document["id"]),
+                "name": existing_document.get("original_filename") or "Untitled",
+                "entity_names": existing_document.get("entity_names") or [],
+                "records_count": int(existing_document.get("records_count") or 0),
+                "chunks_count": int(existing_document.get("chunks_count") or 0),
+                "created_at": existing_document["created_at"].isoformat()
+                if existing_document.get("created_at")
+                else None,
+            },
+        }
 
     blocks = _extract_blocks(storage_path)
     records = _blocks_to_records(blocks)
@@ -692,8 +781,6 @@ async def ingest_upload(
         if embedded:
             embeddings = embedded
 
-    sha256 = hashlib.sha256(file_bytes).hexdigest()
-
     with get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             entity_row = _ensure_entity(
@@ -716,7 +803,16 @@ async def ingest_upload(
                     file.content_type,
                     sha256,
                     str(storage_path),
-                    json.dumps({"doc_type": doc_type}),
+                    json.dumps(
+                        {
+                            "doc_type": doc_type,
+                            "ingest_source": "upload",
+                            "parser": records[0].metadata.get("parser") if records else None,
+                            "record_count": len(records),
+                            "block_count": len(blocks),
+                            "original_filename": file.filename,
+                        }
+                    ),
                 ],
             )
             document_row = cur.fetchone()
@@ -799,7 +895,16 @@ async def ingest_upload(
                         record.title,
                         record.content,
                         record.provenance_pointer,
-                        json.dumps({"doc_type": doc_type, "ingest_source": "upload"}),
+                        json.dumps(
+                            {
+                                "doc_type": doc_type,
+                                "ingest_source": "upload",
+                                "page_number": record.metadata.get("page_number"),
+                                "heading_path": record.metadata.get("heading_path"),
+                                "parser": record.metadata.get("parser"),
+                                "original_filename": file.filename,
+                            }
+                        ),
                         record.content,
                     ],
                 )
@@ -871,7 +976,13 @@ async def ingest_upload(
                             chunk.offset_end,
                             chunk.chunk_index,
                             chunk.chunk_text,
-                            json.dumps({**chunk.chunk_metadata, "source": source}),
+                            json.dumps(
+                                {
+                                    **chunk.chunk_metadata,
+                                    "source": source,
+                                    "document_filename": file.filename,
+                                }
+                            ),
                             _vector_literal(embedding) if embedding else None,
                             chunk.chunk_text,
                         ],
@@ -1063,13 +1174,17 @@ def _fetch_chunk_payloads(chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
                   c.id,
                   c.record_id,
                   c.record_type,
+                  c.chunk_index,
                   c.chunk_text,
                   c.section,
                   c.offset_start,
                   c.offset_end,
+                  c.chunk_metadata,
                   r.document_id,
                   r.title as record_title,
                   r.provenance_pointer,
+                  r.metadata as record_metadata,
+                  d.original_filename as document_name,
                   (
                     select array_agg(distinct e.display_name order by e.display_name)
                     from entity_records er
@@ -1078,12 +1193,175 @@ def _fetch_chunk_payloads(chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
                   ) as entity_names
                 from chunks c
                 join records r on r.id = c.record_id
+                left join documents d on d.id = r.document_id
                 where c.id = any(%s::uuid[])
                 """,
                 [chunk_ids],
             )
             rows = cur.fetchall()
     return {str(row["id"]): row for row in rows}
+
+
+def _trigram_candidates(
+    *,
+    query: str,
+    top_k: int,
+    source_filter: str | None,
+    record_type: str | None,
+    candidate_chunk_ids: list[str] | None,
+) -> list[dict[str, Any]]:
+    similarity_sql = """
+        greatest(
+            similarity(c.chunk_text, %s),
+            similarity(coalesce(r.title, ''), %s),
+            similarity(coalesce(c.section, ''), %s),
+            similarity(coalesce(c.chunk_metadata->>'heading_path', ''), %s)
+        )
+    """
+    clauses = [f"{similarity_sql} > 0.08"]
+    filter_params: list[Any] = []
+    if source_filter:
+        clauses.append("c.chunk_metadata->>'source' = %s")
+        filter_params.append(source_filter)
+    if record_type:
+        clauses.append("c.record_type = %s")
+        filter_params.append(record_type)
+    if candidate_chunk_ids is not None:
+        clauses.append("c.id = any(%s::uuid[])")
+        filter_params.append(candidate_chunk_ids)
+
+    candidate_limit = max(top_k * 6, RETRIEVAL_TRIGRAM_CANDIDATES)
+    sql = f"""
+        select c.id, {similarity_sql} as trigram_rank
+        from chunks c
+        join records r on r.id = c.record_id
+        where {" and ".join(clauses)}
+        order by trigram_rank desc
+        limit %s
+    """
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                sql,
+                [query, query, query, query, query, query, query, query, *filter_params, candidate_limit],
+            )
+            return cur.fetchall()
+
+
+def _page_number_from_row(row: dict[str, Any]) -> int | None:
+    for metadata in [row.get("chunk_metadata") or {}, row.get("record_metadata") or {}]:
+        value = metadata.get("page_number")
+        if value is None or value == "":
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _section_label_from_row(row: dict[str, Any]) -> str | None:
+    metadata = row.get("chunk_metadata") or {}
+    for value in [
+        metadata.get("heading_path"),
+        metadata.get("block_title"),
+        row.get("section"),
+        row.get("record_title"),
+    ]:
+        cleaned = str(value).strip() if value is not None else ""
+        if cleaned:
+            return cleaned
+    return None
+
+
+def _fetch_chunk_windows(
+    anchor_chunk_ids: list[str], *, window: int
+) -> dict[str, dict[str, Any]]:
+    if not anchor_chunk_ids:
+        return {}
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                with anchors as (
+                    select id as anchor_id, record_id, chunk_index, coalesce(section, '') as section
+                    from chunks
+                    where id = any(%s::uuid[])
+                )
+                select
+                  a.anchor_id,
+                  c.id,
+                  c.chunk_index,
+                  c.chunk_text
+                from anchors a
+                join chunks c
+                  on c.record_id = a.record_id
+                 and coalesce(c.section, '') = a.section
+                 and c.chunk_index between a.chunk_index - %s and a.chunk_index + %s
+                order by a.anchor_id, c.chunk_index asc
+                """,
+                [anchor_chunk_ids, window, window],
+            )
+            rows = cur.fetchall()
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        anchor_id = str(row["anchor_id"])
+        grouped.setdefault(anchor_id, {"chunk_ids": [], "text_parts": []})
+        grouped[anchor_id]["chunk_ids"].append(str(row["id"]))
+        text = str(row.get("chunk_text") or "").strip()
+        if text:
+            grouped[anchor_id]["text_parts"].append(text)
+
+    return {
+        anchor_id: {
+            "chunk_ids": value["chunk_ids"],
+            "text": "\n\n".join(value["text_parts"]).strip(),
+        }
+        for anchor_id, value in grouped.items()
+    }
+
+
+def _select_evidence_groups(
+    *,
+    ranked_chunk_ids: list[str],
+    payloads: dict[str, dict[str, Any]],
+    fused_scores: dict[str, float],
+    top_k: int,
+) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for chunk_id in ranked_chunk_ids[: max(top_k * 4, RETRIEVAL_GROUP_LIMIT)]:
+        row = payloads.get(chunk_id)
+        if row is None:
+            continue
+        page_number = _page_number_from_row(row)
+        section_label = _section_label_from_row(row) or ""
+        group_key = (
+            str(row.get("document_id") or ""),
+            str(row.get("record_id") or ""),
+            str(page_number or ""),
+            section_label,
+        )
+        score = float(fused_scores.get(chunk_id, 0.0))
+        group = groups.get(group_key)
+        if group is None:
+            groups[group_key] = {
+                "best_chunk_id": chunk_id,
+                "best_score": score,
+                "support_count": 1,
+            }
+            continue
+        group["support_count"] += 1
+        if score > group["best_score"]:
+            group["best_score"] = score
+            group["best_chunk_id"] = chunk_id
+
+    ranked_groups = sorted(
+        groups.values(),
+        key=lambda group: group["best_score"] + min(0.04 * (group["support_count"] - 1), 0.16),
+        reverse=True,
+    )
+    return ranked_groups[:top_k]
 
 
 def lexical_candidate_ids(
@@ -1344,8 +1622,17 @@ def retrieve_chunks(
         else []
     )
 
+    trigram_rows = _trigram_candidates(
+        query=query,
+        top_k=top_k,
+        source_filter=source_filter,
+        record_type=record_type,
+        candidate_chunk_ids=candidate_chunk_ids,
+    )
+
     semantic_weight = alpha if semantic_rows else 0.0
-    lexical_weight = 1.0 - alpha if semantic_rows else 1.0
+    lexical_weight = (1.0 - alpha) * (0.8 if trigram_rows else 1.0) if semantic_rows else 0.75
+    trigram_weight = (1.0 - alpha) * 0.2 if semantic_rows else 0.25
     fused_scores: dict[str, float] = {}
     for rank, row in enumerate(semantic_rows, start=1):
         chunk_id = str(row["id"])
@@ -1357,36 +1644,61 @@ def retrieve_chunks(
         fused_scores[chunk_id] = fused_scores.get(chunk_id, 0.0) + _rrf(
             rank, weight=lexical_weight
         )
+    for rank, row in enumerate(trigram_rows, start=1):
+        chunk_id = str(row["id"])
+        fused_scores[chunk_id] = fused_scores.get(chunk_id, 0.0) + _rrf(
+            rank, weight=trigram_weight
+        )
 
-    chunk_ids = [
+    ranked_chunk_ids = [
         chunk_id
         for chunk_id, _score in sorted(
             fused_scores.items(), key=lambda item: item[1], reverse=True
-        )[:top_k]
+        )[: max(top_k * 4, RETRIEVAL_GROUP_LIMIT)]
     ]
-    payloads = _fetch_chunk_payloads(chunk_ids)
+    payloads = _fetch_chunk_payloads(ranked_chunk_ids)
+    evidence_groups = _select_evidence_groups(
+        ranked_chunk_ids=ranked_chunk_ids,
+        payloads=payloads,
+        fused_scores=fused_scores,
+        top_k=top_k,
+    )
+    window_payloads = _fetch_chunk_windows(
+        [group["best_chunk_id"] for group in evidence_groups],
+        window=RETRIEVAL_ADJACENT_WINDOW,
+    )
 
     out: list[dict[str, Any]] = []
-    for chunk_id in chunk_ids:
+    for index, group in enumerate(evidence_groups, start=1):
+        chunk_id = str(group["best_chunk_id"])
         row = payloads.get(chunk_id)
         if row is None:
             continue
-        snippet, highlights = _make_snippet(row.get("chunk_text") or "", query)
+        window = window_payloads.get(chunk_id) or {}
+        text = (window.get("text") or row.get("chunk_text") or "").strip()
+        snippet, highlights = _make_snippet(text, query)
+        page_number = _page_number_from_row(row)
+        section_label = _section_label_from_row(row)
         out.append(
             {
                 "chunk_id": chunk_id,
+                "related_chunk_ids": window.get("chunk_ids") or [chunk_id],
                 "record_id": str(row["record_id"]),
                 "record_type": row["record_type"],
-                "score": float(fused_scores.get(chunk_id, 0.0)),
-                "text": row["chunk_text"],
+                "score": float(group["best_score"]),
+                "support_count": int(group["support_count"]),
+                "text": text,
                 "snippet": snippet,
                 "highlights": highlights,
                 "citation": {
+                    "label": f"S{index}",
                     "document_id": str(row["document_id"])
                     if row.get("document_id")
                     else None,
+                    "document_name": row.get("document_name"),
                     "entity_names": row.get("entity_names") or [],
-                    "section": row.get("section"),
+                    "section": section_label,
+                    "page_number": page_number,
                     "offset_start": row.get("offset_start"),
                     "offset_end": row.get("offset_end"),
                     "record_id": str(row["record_id"]),
@@ -1452,7 +1764,6 @@ def answer_question(
         candidate_chunk_ids=candidate_ids,
         require_fts=not bool(candidate_ids),
     )
-    print(f"-------------Retrieved chunks-----------/n {retrieved}")
     if candidate_ids and not retrieved:
         retrieved = retrieve_chunks(
             query=query,
@@ -1470,7 +1781,7 @@ def answer_question(
         }
 
     context_lines: list[str] = []
-    for index, chunk in enumerate(retrieved, start=1):
+    for chunk in retrieved:
         citation = chunk.get("citation") or {}
         context_piece = (
             chunk.get("text") if context_mode == "full" else chunk.get("snippet")
@@ -1478,8 +1789,10 @@ def answer_question(
         context_piece = (context_piece or chunk.get("text") or "").strip()
         if context_mode != "full":
             context_piece = context_piece[:800]
+        page_part = f" | page={citation.get('page_number')}" if citation.get("page_number") else ""
+        section_part = f" | section={citation.get('section')}" if citation.get("section") else ""
         context_lines.append(
-            f"[Chunk {index} | document_id={citation.get('document_id')} | section={citation.get('section')} | score={chunk.get('score')}]\n{context_piece}"
+            f"[{citation.get('label') or 'Source'} | document={citation.get('document_name') or citation.get('document_id')}{page_part}{section_part} | score={chunk.get('score')}]\n{context_piece}"
         )
     context = "\n\n".join(context_lines)
 
@@ -1490,12 +1803,16 @@ def answer_question(
                     "role": "system",
                     "content": (
                         "You are a grounded NDIS assistant. Answer only using the supplied context. "
-                        "If the context is insufficient, say you do not know and suggest what document to ingest next."
+                        "If the context is insufficient, say you do not know and suggest what document to ingest next. "
+                        "When you make a factual claim, cite the supporting source labels like [S1] or [S2]."
                     ),
                 },
                 {
                     "role": "user",
-                    "content": f"Question: {query}\n\nContext:\n{context}\n\nReturn a concise answer.",
+                    "content": (
+                        f"Question: {query}\n\nContext:\n{context}\n\n"
+                        "Return a concise answer with inline source labels."
+                    ),
                 },
             ]
         )
@@ -1504,7 +1821,7 @@ def answer_question(
         answer = "\n".join(
             ["Relevant evidence found:"]
             + [
-                f"- {(chunk.get('snippet') or chunk.get('text') or '').strip()}"
+                f"- [{(chunk.get('citation') or {}).get('label') or 'Source'}] {(chunk.get('snippet') or chunk.get('text') or '').strip()}"
                 for chunk in retrieved[:3]
             ]
         )

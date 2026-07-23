@@ -38,8 +38,8 @@ export default function DocumentSidebar() {
         const result = await api.postForm("/documents", formData);
         setStatus(
           result.embedding_status === "lexical_only"
-            ? `${file.name} uploaded${result.entity?.display_name ? ` for ${result.entity.display_name}` : ""}. Semantic embeddings are offline, so search is lexical-only for now.`
-            : `${file.name} uploaded successfully${result.entity?.display_name ? ` for ${result.entity.display_name}` : ""}.`
+             ? `${file.name} added${result.entity?.display_name ? ` for ${result.entity.display_name}` : ""}. You can still find it by searching for words in the file.`
+            : `${file.name} added${result.entity?.display_name ? ` for ${result.entity.display_name}` : ""}.`
         );
       }
       await loadDocuments();
@@ -64,20 +64,20 @@ export default function DocumentSidebar() {
   return (
     <div className="flex flex-col h-full">
       <h2 className="font-display text-sm font-semibold uppercase tracking-wide text-slate mb-3">
-        Documents
+         Add or manage files
       </h2>
 
       <div className="block">
         <input
           value={entityName}
           onChange={(e) => setEntityName(e.target.value)}
-          placeholder="Participant or entity name"
+          placeholder="Who is this for?"
           className="w-full mb-2 rounded-md border border-slate-200 px-3 py-2 text-sm"
         />
         <input
           value={entityAliases}
           onChange={(e) => setEntityAliases(e.target.value)}
-          placeholder="Aliases, comma separated"
+          placeholder="Other names (optional)"
           className="w-full mb-2 rounded-md border border-slate-200 px-3 py-2 text-sm"
         />
         <input
@@ -92,7 +92,7 @@ export default function DocumentSidebar() {
           onClick={() => fileInputRef.current?.click()}
           className="block w-full text-center text-sm font-medium text-teal-700 border border-dashed border-teal-500/50 rounded-md py-3 cursor-pointer hover:bg-teal-50 transition-colors"
         >
-          {uploading ? "Uploading…" : "Upload documents"}
+          {uploading ? "Adding file…" : "Add a file"}
         </button>
       </div>
 
@@ -116,7 +116,7 @@ export default function DocumentSidebar() {
                   {doc.name}
                 </div>
                 <div className="text-[11px] text-slate mt-0.5">
-                  {doc.records_count} records · {doc.chunks_count} chunks
+                  {doc.records_count} notes · ready to search
                 </div>
                 {doc.entity_names?.length ? (
                   <div className="text-[11px] text-teal-700 mt-0.5 truncate">
@@ -136,7 +136,7 @@ export default function DocumentSidebar() {
         ))}
         {!documents.length && !error && (
           <li className="text-sm text-slate italic px-2">
-            No documents yet
+            No files added yet
           </li>
         )}
       </ul>
