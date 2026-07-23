@@ -20,6 +20,7 @@ def get_pool() -> ConnectionPool:
             DATABASE_URL,
             min_size=DB_POOL_MIN_SIZE,
             max_size=DB_POOL_MAX_SIZE,
+            check=ConnectionPool.check_connection,
             # Disable server-side prepared statements for compatibility with
             # transaction-pooled Postgres frontends such as PgBouncer.
             kwargs={"autocommit": False, "prepare_threshold": None},

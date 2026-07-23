@@ -18,6 +18,7 @@ from src.ai.runtime import transcribe_audio_file
 from .generate_pdf import soap_to_pdf
 from .local_llm import invoke_structured
 from src.project_guards import require_valid_input, require_valid_output
+from src.rag.service import _extract_note_entity, find_entity_candidates
 
 load_dotenv()
 
@@ -51,6 +52,12 @@ class AgentState(TypedDict):
     human_feedback: Optional[str]
     pdf_path: Optional[str]
     final_response: str
+    detected_entity_name: Optional[str]
+    confirmed_entity_name: Optional[str]
+    entity_confirmation_complete: bool
+    note_confirmation_pending: bool
+    confirmed_entity_id: Optional[str]
+    create_new_entity: bool
 
 
 sys_prompt = """
@@ -130,8 +137,47 @@ def human_review_node(state: AgentState) -> AgentState:
     if not note:
         return {}
 
+    if not state.get("entity_confirmation_complete"):
+        detected_name, entity_type, aliases = _extract_note_entity(
+            note.model_dump(), state.get("transcript", "")
+        )
+        candidates = find_entity_candidates(detected_name)
+        confirmation = interrupt(
+            {
+                "type": "entity_confirmation",
+                "entity_name": detected_name,
+                "entity_type": entity_type,
+                "aliases": aliases,
+                "candidates": candidates,
+                "question": "Is this the correct participant/entity? Reply YES or provide the correct name.",
+            }
+        )
+        if isinstance(confirmation, dict):
+            confirmed = str(confirmation.get("entity_name") or "").strip()
+            confirmed_flag = confirmation.get("confirmed") is True
+            selected_entity_id = confirmation.get("entity_id")
+            create_new = confirmation.get("create_new_entity") is True
+        else:
+            confirmed = str(confirmation or "").strip()
+            confirmed_flag = confirmed.lower() in ("ok", "yes", "approved", "y")
+            if confirmed_flag:
+                confirmed = detected_name or ""
+            selected_entity_id = None
+            create_new = False
+        if not confirmed_flag and not confirmed:
+            require_valid_input(confirmed, field_name="entity name")
+        return {
+            "detected_entity_name": detected_name,
+            "confirmed_entity_name": confirmed or detected_name,
+            "entity_confirmation_complete": True,
+            "note_confirmation_pending": True,
+            "confirmed_entity_id": selected_entity_id,
+            "create_new_entity": create_new,
+        }
+
     feedback = interrupt(
         {
+            "type": "note_review",
             "note": note.model_dump(),
             "question": "Approve this NDIS Progress Note? Reply YES or provide correction.",
         }
@@ -139,9 +185,9 @@ def human_review_node(state: AgentState) -> AgentState:
     feedback_text = feedback if isinstance(feedback, str) else str(feedback or "")
     normalized_feedback = feedback_text.strip()
     if normalized_feedback.lower() in ("ok", "yes", "approved", "y"):
-        return {"human_feedback": None}
+        return {"human_feedback": None, "note_confirmation_pending": False}
     require_valid_input(normalized_feedback, field_name="human feedback")
-    return {"human_feedback": normalized_feedback}
+    return {"human_feedback": normalized_feedback, "note_confirmation_pending": False}
 
 
 def finalize_node(state: AgentState) -> AgentState:
@@ -160,7 +206,9 @@ def finalize_node(state: AgentState) -> AgentState:
     }
 
 
-def check_humanfb(state: AgentState) -> Literal["generate_progress_note", "finalize_node"]:
+def check_humanfb(state: AgentState) -> Literal["human_review_node", "generate_progress_note", "finalize_node"]:
+    if not state.get("entity_confirmation_complete") or state.get("note_confirmation_pending"):
+        return "human_review_node"
     if not state.get("human_feedback"):
         return "finalize_node"
     return "generate_progress_note"
@@ -181,6 +229,7 @@ def build_graph():
 
     pool = ConnectionPool(
         conn_string,
+        check=ConnectionPool.check_connection,
         kwargs={"autocommit": True, "row_factory": None, "prepare_threshold": None},
     )
     checkpointer = PostgresSaver(pool)
