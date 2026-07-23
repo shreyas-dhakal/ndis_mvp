@@ -60,7 +60,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
-      <h1 className="font-display text-2xl font-semibold mb-1">Ask Morrow</h1>
+      <h1 className="font-display text-2xl font-semibold mb-1">Ask Caseload AI</h1>
       <p className="text-slate text-sm mb-6">
         Ask a question about a person, a goal, or one of your files.
       </p>

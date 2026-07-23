@@ -4,7 +4,7 @@ import DocumentSidebar from "../components/DocumentSidebar.jsx";
 const NAV_ITEMS = [
   { to: "/notes", label: "New note", icon: "✦" },
   { to: "/tasks", label: "To do", icon: "↗" },
-  { to: "/chat", label: "Ask Morrow", icon: "⌁" },
+  { to: "/chat", label: "Ask Caseload AI", icon: "⌁" },
 ];
 
 export default function AppShell() {
@@ -15,10 +15,10 @@ export default function AppShell() {
     <div className="min-h-screen bg-paper text-ink md:flex">
       <aside className="app-rail flex w-full flex-col bg-ink px-5 py-5 text-white md:sticky md:top-0 md:h-screen md:w-[248px] md:shrink-0">
         <div className="flex items-center gap-3">
-          <div className="brand-mark"><span>m</span></div>
-          <div>
-            <div className="font-display text-[17px] font-semibold tracking-tight">morrow</div>
-            <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-white/40">support notes</div>
+           <div className="brand-mark"><span>c</span></div>
+           <div>
+             <div className="font-display text-[17px] font-semibold tracking-tight">Caseload AI</div>
+             <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-white/40">support notes</div>
           </div>
         </div>
 
@@ -34,7 +34,7 @@ export default function AppShell() {
 
         <div className="mt-auto hidden rounded-2xl border border-white/10 bg-white/[0.06] p-4 md:block">
           <div className="mb-3 flex items-center gap-2"><span className="status-dot" /> <span className="font-mono text-[10px] uppercase tracking-wider text-white/55">Ready to use</span></div>
-          <p className="text-xs leading-relaxed text-white/55">Morrow helps you turn everyday support work into clear, useful records.</p>
+           <p className="text-xs leading-relaxed text-white/55">Caseload AI helps you turn everyday support work into clear, useful records.</p>
         </div>
         <div className="mt-5 flex items-center gap-3 border-t border-white/10 pt-4">
           <div className="avatar">JS</div>
@@ -60,7 +60,7 @@ export default function AppShell() {
         <div className="flex min-w-0 flex-1">
           <main className="mx-auto w-full max-w-[1240px] flex-1 p-5 md:p-10"><Outlet /><div className="surface mt-6 p-4 xl:hidden"><DocumentSidebar /></div></main>
           <aside className="hidden w-[290px] shrink-0 border-l border-line bg-[#eeeee8] px-5 py-8 xl:block">
-            <div className="mb-4"><div className="eyebrow">Workspace context</div><h2 className="mt-1 font-display text-lg font-semibold">Your files</h2><p className="mt-1 text-xs leading-5 text-slate">Add notes and files here so Morrow can help you find the right detail.</p></div>
+             <div className="mb-4"><div className="eyebrow">Workspace context</div><h2 className="mt-1 font-display text-lg font-semibold">Your files</h2><p className="mt-1 text-xs leading-5 text-slate">Add notes and files here so Caseload AI can help you find the right detail.</p></div>
             <div className="surface min-h-[420px] p-4"><DocumentSidebar /></div>
           </aside>
         </div>
