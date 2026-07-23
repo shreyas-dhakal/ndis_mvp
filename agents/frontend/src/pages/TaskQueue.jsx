@@ -52,10 +52,11 @@ function TaskList({ view, showApproveDismiss }) {
   return (
     <div className="space-y-3">
       {tasks.map((task) => (
-        <div key={task.id} className="border border-line rounded-md p-4 bg-white/40">
+        <div key={task.id} className="surface p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="font-display font-semibold text-sm capitalize">
+              <div className="mb-1 flex items-center gap-2 font-display font-semibold text-sm capitalize">
+                <span className="h-2 w-2 rounded-full bg-ochre-400" />
                 {task.trigger_id.replace(/_/g, " ")}
               </div>
               <div className="text-xs text-slate font-mono mt-0.5">
@@ -124,24 +125,54 @@ function TaskList({ view, showApproveDismiss }) {
 
 export default function TaskQueue() {
   const [tab, setTab] = useState("pending");
+  const [pendingCount, setPendingCount] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    const loadPendingCount = async () => {
+      try {
+        const data = await api.get("/tasks", { view: "pending" });
+        if (active) setPendingCount((data.tasks || []).length);
+      } catch {
+        if (active) setPendingCount(null);
+      }
+    };
+
+    loadPendingCount();
+    const interval = setInterval(loadPendingCount, 30000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const attentionLabel = pendingCount === 1 ? "task needing attention" : "tasks needing attention";
 
   return (
-    <div>
-      <h1 className="font-display text-2xl font-semibold mb-1">Tasks</h1>
-      <p className="text-slate text-sm mb-6">
-        Reportable-incident checks surfaced by the trigger agent.
-      </p>
+    <div className="space-y-8">
+      <section><div className="eyebrow mb-4">Your to-do list</div><h1 className="display-title max-w-[700px]">A clear next step<br /><span className="text-teal-600">when it matters.</span></h1><p className="mt-5 max-w-[560px] text-[15px] leading-7 text-slate">Important follow-ups from your notes, brought together so nothing gets missed.</p></section>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <div className="surface p-5"><div className="font-display text-3xl font-semibold tracking-tight">24h</div><div className="mt-1 text-xs text-slate">fastest response window</div></div>
+        <div className="surface p-5"><div className="font-display text-3xl font-semibold tracking-tight">100%</div><div className="mt-1 text-xs text-slate">reviewable decisions</div></div>
+        <button onClick={() => setTab("pending")} className="surface p-5 text-left transition-colors hover:border-teal-400 hover:bg-teal-50/40">
+          <div className="flex items-start justify-between gap-3">
+            <div className="font-display text-3xl font-semibold tracking-tight">{pendingCount === null ? "--" : pendingCount}</div>
+            <span className="text-lg text-teal-700" aria-hidden="true">↗</span>
+          </div>
+          <div className="mt-1 text-xs text-slate">{pendingCount === null ? "checking queue" : attentionLabel}</div>
+        </button>
+      </div>
 
-      <div className="flex gap-1 mb-5 w-fit border border-line rounded-sm p-0.5">
+      <div className="flex gap-1 mb-5 w-fit rounded-lg border border-line bg-white p-1">
         {[
-          ["pending", "Needs Review"],
-          ["confirmed", "Confirmed — Pending Action"],
+           ["pending", "Needs your review"],
+           ["confirmed", "Ready to action"],
         ].map(([value, label]) => (
           <button
             key={value}
             onClick={() => setTab(value)}
             className={`px-4 py-1.5 text-sm rounded-sm font-medium transition-colors ${
-              tab === value ? "bg-teal-500 text-white" : "text-slate hover:text-ink"
+              tab === value ? "bg-ink text-white" : "text-slate hover:text-ink"
             }`}
           >
             {label}

@@ -1,5 +1,5 @@
 // In dev, requests go to /api/* and Vite's proxy (vite.config.js) forwards
-// them to FastAPI on :8000 — no CORS setup needed locally.
+// them to the FastAPI service configured for the current environment.
 // In production, set VITE_API_URL to your deployed backend and requests
 // go straight there (make sure CORS is enabled on the FastAPI side then).
 const BASE_URL = import.meta.env.VITE_API_URL || "/api";

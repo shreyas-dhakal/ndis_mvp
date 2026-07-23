@@ -60,15 +60,15 @@ export default function ChatPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
-      <h1 className="font-display text-2xl font-semibold mb-1">Chat</h1>
+      <h1 className="font-display text-2xl font-semibold mb-1">Ask Morrow</h1>
       <p className="text-slate text-sm mb-6">
-        Ask questions about the documents in your sidebar.
+        Ask a question about a person, a goal, or one of your files.
       </p>
 
       <div className="flex-1 border border-line rounded-md bg-white/40 p-4 overflow-y-auto space-y-3">
         {!messages.length && (
           <p className="text-sm text-slate italic">
-            No messages yet. Ask something about an uploaded document to get started.
+            Start with a question like “What goals did we work on with Sam last month?”
           </p>
         )}
         {messages.map((m, i) => (
@@ -93,7 +93,7 @@ export default function ChatPage() {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Ask about a participant's documents…"
+          placeholder="What would you like to find out?"
           className="flex-1 border border-line rounded-md px-3 py-2.5 text-sm focus:border-teal-500 outline-none"
         />
         <button
@@ -101,7 +101,7 @@ export default function ChatPage() {
           disabled={sending}
           className="px-5 py-2.5 bg-teal-500 text-white text-sm font-medium rounded-md hover:bg-teal-600 disabled:opacity-50 transition-colors"
         >
-          {sending ? "Sending…" : "Send"}
+          {sending ? "Thinking…" : "Ask"}
         </button>
       </div>
     </div>

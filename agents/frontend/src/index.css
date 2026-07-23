@@ -1,6 +1,28 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+body { margin: 0; background: #f4f3ee; font-family: "DM Sans", sans-serif; }
+button, input, textarea, select { font: inherit; }
+.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px 10px 10px 3px; background: #d8ff54; color: #17252c; font-family: "Space Grotesk", sans-serif; font-weight: 700; font-size: 20px; transform: rotate(-7deg); }
+.brand-mark span { transform: rotate(7deg); }
+.rail-link { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px; color: rgba(255,255,255,.55); font-size: 13px; transition: .2s ease; }
+.rail-link:hover { color: #fff; background: rgba(255,255,255,.06); }
+.rail-link.is-active { color: #18272c; background: #d8ff54; font-weight: 600; }
+.rail-icon { width: 20px; text-align: center; font-size: 16px; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: #d8ff54; box-shadow: 0 0 0 4px rgba(216,255,84,.12); }
+.avatar { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: #f2aa7c; color: #17252c; font-size: 11px; font-weight: 700; }
+.icon-button { border: 1px solid #dddcd4; background: #fff; border-radius: 9px; width: 34px; height: 34px; color: #5b6b6a; }
+.eyebrow { font-family: "DM Mono", monospace; font-size: 10px; text-transform: uppercase; letter-spacing: .18em; color: #74817e; }
+.display-title { font-family: "Space Grotesk", sans-serif; font-size: clamp(2rem, 4vw, 3.8rem); line-height: .98; letter-spacing: -.055em; }
+.surface { border: 1px solid #deddd4; border-radius: 18px; background: rgba(255,255,255,.72); box-shadow: 0 16px 38px rgba(29,42,45,.045); }
+.lime-button { border-radius: 10px; background: #d8ff54; color: #19292d; font-weight: 700; transition: transform .2s, box-shadow .2s; }
+.lime-button:hover { transform: translateY(-2px); box-shadow: 0 9px 20px rgba(150,180,50,.22); }
+.dropzone { display: flex; min-height: 170px; cursor: pointer; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed rgba(47,111,107,.45); border-radius: 14px; background: #eaf2f1; text-align: center; transition: .2s ease; }
+.dropzone:hover { border-color: #2f6f6b; background: #dff0ed; }
+.dropzone-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 12px; background: #fff; color: #2f6f6b; font-size: 20px; box-shadow: 0 5px 15px rgba(29,42,45,.08); }
 
 @layer base {
   h1,

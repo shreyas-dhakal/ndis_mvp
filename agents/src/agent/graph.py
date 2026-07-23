@@ -179,7 +179,10 @@ def build_graph():
     graph.add_conditional_edges("human_review_node", check_humanfb)
     graph.add_edge("finalize_node", END)
 
-    pool = ConnectionPool(conn_string, kwargs={"autocommit": True, "row_factory": None})
+    pool = ConnectionPool(
+        conn_string,
+        kwargs={"autocommit": True, "row_factory": None, "prepare_threshold": None},
+    )
     checkpointer = PostgresSaver(pool)
     checkpointer.setup()
     return graph.compile(checkpointer=checkpointer)
