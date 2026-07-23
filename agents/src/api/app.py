@@ -3,6 +3,7 @@ import os
 import shutil
 import json
 
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from langgraph.types import Command
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -490,3 +491,158 @@ def action_task(task_id: str, payload: TaskActionRequest):
             {"r": payload.reviewer, "id": task_id},
         )
     return {"status": "actioned"}
+
+
+@app.get("/entities")
+def list_entities():
+    with spine_pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT id, display_name, aliases FROM entities ORDER BY display_name ASC"
+        ).fetchall()
+    return [
+        {"id": str(row[0]), "name": row[1], "aliases": row[2] or []}
+        for row in rows
+    ]
+
+
+@app.get("/dashboard/stats")
+def dashboard_stats(entity_id: Optional[str] = None):
+    if entity_id is not None:
+        try:
+            uuid.UUID(entity_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="entity_id must be a valid UUID")
+
+    now = datetime.now(timezone.utc)
+    week_start = (now - timedelta(days=now.weekday())).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    last_month_end = month_start
+    last_month_start = (month_start - timedelta(days=1)).replace(day=1)
+    since_30d = now - timedelta(days=30)
+    since_90d = now - timedelta(days=90)
+    trend_start = week_start - timedelta(weeks=3)
+
+    # "Flagged" incident tasks are the ones the risk & escalation agent (a2)
+    # created via the triggered_by link — this excludes plain document text
+    # that the ingestion classifier happens to label 'incident'.
+    flagged_incident_join = """
+        FROM records r
+        JOIN links l ON l.from_record_id = r.id AND l.link_type = 'triggered_by'
+        WHERE r.record_type = 'incident'
+    """
+    entity_clause = "AND r.entity_id = %(entity_id)s::uuid" if entity_id else ""
+    entity_params: dict[str, Any] = {"entity_id": entity_id} if entity_id else {}
+
+    with spine_pool.connection() as conn:
+        open_tasks = conn.execute(
+            f"SELECT count(*) {flagged_incident_join} AND r.status = 'draft' {entity_clause}",
+            entity_params,
+        ).fetchone()[0]
+
+        incidents_this_month = conn.execute(
+            f"SELECT count(*) {flagged_incident_join} AND r.created_at >= %(since)s {entity_clause}",
+            {"since": month_start, **entity_params},
+        ).fetchone()[0]
+
+        incidents_last_month = conn.execute(
+            f"SELECT count(*) {flagged_incident_join} AND r.created_at >= %(start)s AND r.created_at < %(end)s {entity_clause}",
+            {"start": last_month_start, "end": last_month_end, **entity_params},
+        ).fetchone()[0]
+
+        tasks_pending_this_week = conn.execute(
+            f"SELECT count(*) {flagged_incident_join} AND r.status = 'draft' AND r.created_at >= %(since)s {entity_clause}",
+            {"since": week_start, **entity_params},
+        ).fetchone()[0]
+
+        notes_completed_this_week = conn.execute(
+            f"SELECT count(*) FROM records r WHERE record_type = 'note' AND created_at >= %(since)s {entity_clause}",
+            {"since": week_start, **entity_params},
+        ).fetchone()[0]
+
+        if entity_id:
+            documents_ingested_this_week = conn.execute(
+                """
+                SELECT count(distinct d.id)
+                FROM documents d
+                JOIN entity_documents ed ON ed.document_id = d.id
+                WHERE d.created_at >= %(since)s AND ed.entity_id = %(entity_id)s::uuid
+                """,
+                {"since": week_start, **entity_params},
+            ).fetchone()[0]
+        else:
+            documents_ingested_this_week = conn.execute(
+                "SELECT count(*) FROM documents WHERE created_at >= %(since)s",
+                {"since": week_start},
+            ).fetchone()[0]
+
+        def incidents_by_category(since: datetime) -> list[dict[str, Any]]:
+            rows = conn.execute(
+                f"""
+                SELECT coalesce(r.body->>'trigger_id', 'uncategorised') AS category, count(*)
+                {flagged_incident_join} AND r.created_at >= %(since)s {entity_clause}
+                GROUP BY category
+                ORDER BY count(*) DESC
+                """,
+                {"since": since, **entity_params},
+            ).fetchall()
+            return [{"category": row[0], "count": int(row[1])} for row in rows]
+
+        notes_trend_rows = conn.execute(
+            f"""
+            SELECT date_trunc('week', created_at) AS week_start, count(*)
+            FROM records r
+            WHERE record_type = 'note' AND created_at >= %(since)s {entity_clause}
+            GROUP BY week_start
+            ORDER BY week_start
+            """,
+            {"since": trend_start, **entity_params},
+        ).fetchall()
+
+        recent_rows = conn.execute(
+            f"""
+            SELECT r.id, r.body, r.status, r.created_at, e.display_name
+            FROM records r
+            JOIN links l ON l.from_record_id = r.id AND l.link_type = 'triggered_by'
+            LEFT JOIN entities e ON e.id = r.entity_id
+            WHERE r.record_type = 'incident' {entity_clause}
+            ORDER BY r.created_at DESC
+            LIMIT 10
+            """,
+            entity_params,
+        ).fetchall()
+
+    notes_trend = []
+    trend_by_week = {row[0].date().isoformat(): int(row[1]) for row in notes_trend_rows}
+    for i in range(4):
+        week = (trend_start + timedelta(weeks=i)).date().isoformat()
+        notes_trend.append({"week_start": week, "count": trend_by_week.get(week, 0)})
+
+    recent_flagged_tasks = []
+    for row in recent_rows:
+        body = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+        recent_flagged_tasks.append(
+            {
+                "id": str(row[0]),
+                "participant": row[4] or "Unknown participant",
+                "category": body.get("trigger_id"),
+                "created_at": row[3].isoformat(),
+                "status": row[2],
+            }
+        )
+
+    return {
+        "open_tasks": int(open_tasks),
+        "incidents_this_month": int(incidents_this_month),
+        "incidents_last_month": int(incidents_last_month),
+        "tasks_pending_this_week": int(tasks_pending_this_week),
+        "notes_completed_this_week": int(notes_completed_this_week),
+        "documents_ingested_this_week": int(documents_ingested_this_week),
+        "incidents_by_category": {
+            "30d": incidents_by_category(since_30d),
+            "90d": incidents_by_category(since_90d),
+        },
+        "notes_trend": notes_trend,
+        "recent_flagged_tasks": recent_flagged_tasks,
+    }

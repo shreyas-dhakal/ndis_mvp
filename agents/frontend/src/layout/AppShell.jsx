@@ -2,6 +2,7 @@ import { NavLink, Outlet, useLocation } from "react-router-dom";
 import DocumentSidebar from "../components/DocumentSidebar.jsx";
 
 const NAV_ITEMS = [
+  { to: "/dashboard", label: "Dashboard", icon: "◧" },
   { to: "/notes", label: "New note", icon: "✦" },
   { to: "/tasks", label: "To do", icon: "↗" },
   { to: "/chat", label: "Ask Caseload AI", icon: "⌁" },
