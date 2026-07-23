@@ -3,13 +3,17 @@ updated_by: "<compliance-lead-to-fill-in>"
 triggers:
   - id: reportable_incident_injury
     description: >
-      Any mention of physical injury to the participant, however minor,
-      that occurred during a supported activity.
+      Any mention of physical injury or acute physical symptoms affecting
+      the participant, however minor, that occurred during a supported
+      activity.
     examples_positive:
       - "she fell during the walk and scraped her knee"
       - "bumped his head getting into the car"
+      - "participant reported a headache while out in the community"
+      - "she became dizzy during the supported shopping trip"
     examples_negative:
       - "he mentioned an old injury from before we started support"
+      - "participant has a history of migraines but had no symptoms during support"
     workflow: incident_report
     deadline_hours: 24
 

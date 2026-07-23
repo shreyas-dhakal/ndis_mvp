@@ -181,6 +181,7 @@ def build_graph():
 
     pool = ConnectionPool(
         conn_string,
+        check=ConnectionPool.check_connection,
         kwargs={"autocommit": True, "row_factory": None, "prepare_threshold": None},
     )
     checkpointer = PostgresSaver(pool)
