@@ -42,7 +42,7 @@ spine_pool = get_pool()
 app = FastAPI(title="Agents MVP API")
 
 
-allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173").split(",")
+allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS","http://localhost:5173").split(",")
 
 app.add_middleware(
     CORSMiddleware,
