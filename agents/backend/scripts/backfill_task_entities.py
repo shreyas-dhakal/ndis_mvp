@@ -13,7 +13,7 @@ For each task with entity_id IS NULL:
   2. Otherwise, run the same heuristic/LLM entity extraction used during
      document ingestion (src.rag.service) against the task's title/content.
 
-Run from the `agents/` directory:
+Run from the `agents/backend/` directory:
     uv run python scripts/backfill_task_entities.py
 """
 

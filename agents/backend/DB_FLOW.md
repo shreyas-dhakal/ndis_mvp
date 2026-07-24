@@ -2,14 +2,14 @@
 
 This document maps how the `agents` app uses Postgres across ingestion, retrieval, note generation, trigger classification, and task review.
 
-Primary schema source: `agents/spine_schema.sql`
+Primary schema source: `agents/backend/spine_schema.sql`
 
 Primary code paths:
-- `agents/src/rag/db.py`
-- `agents/src/rag/service.py`
-- `agents/src/api/app.py`
-- `agents/src/agent/graph.py`
-- `agents/src/agent/classiferAgent.py`
+- `agents/backend/src/rag/db.py`
+- `agents/backend/src/rag/service.py`
+- `agents/backend/src/api/app.py`
+- `agents/backend/src/agent/graph.py`
+- `agents/backend/src/agent/classiferAgent.py`
 
 ## Overview
 
@@ -169,7 +169,7 @@ erDiagram
 
 Code path:
 - API: `POST /documents` and `POST /ingest/file`
-- Function: `ingest_upload()` in `agents/src/rag/service.py`
+- Function: `ingest_upload()` in `agents/backend/src/rag/service.py`
 
 ```mermaid
 flowchart TD
@@ -307,7 +307,7 @@ Code path:
 - `POST /generate/text`
 - `POST /generate/audio`
 - `POST /generate/resume`
-- Final persistence: `store_generated_note()` in `agents/src/rag/service.py`
+- Final persistence: `store_generated_note()` in `agents/backend/src/rag/service.py`
 
 ```mermaid
 flowchart TD
@@ -346,9 +346,9 @@ flowchart TD
 ## Write Flow 3: Classifier Agent and Task Creation
 
 Code path:
-- Triggered from `build_done_response()` in `agents/src/api/app.py`
-- Executed by `run_agent2()` in `agents/src/agent/classiferAgent.py`
-- Taxonomy source: `agents/src/agent/taxonomy.yaml`
+- Triggered from `build_done_response()` in `agents/backend/src/api/app.py`
+- Executed by `run_agent2()` in `agents/backend/src/agent/classiferAgent.py`
+- Taxonomy source: `agents/backend/src/agent/taxonomy.yaml`
 
 ```mermaid
 flowchart TD
@@ -493,7 +493,7 @@ sequenceDiagram
 
 ## Non-Application Tables
 
-`agents/src/agent/graph.py` configures a LangGraph `PostgresSaver` checkpointer.
+`agents/backend/src/agent/graph.py` configures a LangGraph `PostgresSaver` checkpointer.
 
 That means the same Postgres database also stores LangGraph checkpoint tables managed by LangGraph itself. Those tables are not defined in `spine_schema.sql`, but they are part of the runtime DB footprint for note generation and resume flows.
 

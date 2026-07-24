@@ -14,6 +14,7 @@ from src.agent import get_workflow
 from src.agent import run_agent2
 from src.ai.config import DEFAULT_CHAT_MODEL, DEFAULT_CHAT_TARGET, ModelTarget, normalize_provider
 from src.project_guards import GuardValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from src.rag import (
     answer_question,
     chat_completion,
@@ -36,9 +37,20 @@ OUTPUT_DIR = Path(__file__).resolve().parent.parent / "generated_pdfs"
 
 spine_pool = get_pool()
 
+
+
 app = FastAPI(title="Agents MVP API")
 
 
+allowed_origins = os.getenv("CORS_ALLOWED_ORIGINS","http://localhost:5173").split(",")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 def _default_model_registry() -> dict[str, ModelTarget]:
     return {DEFAULT_CHAT_MODEL: DEFAULT_CHAT_TARGET}
 

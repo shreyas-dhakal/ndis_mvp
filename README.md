@@ -4,7 +4,7 @@
 
 ### 1. Create env
 
-From `agents/`:
+From `agents/backend/`:
 
 ```bash
 cp .env.example .env
@@ -12,7 +12,7 @@ cp .env.example .env
 
 ### 2. Set your database and model config
 
-Edit `agents/.env` and set at least:
+Edit `agents/backend/.env` and set at least:
 
 ```bash
 DATABASE_URL=postgresql://postgres:[YOUR-PASSWORD]@db.[YOUR-PROJECT-REF].supabase.co:5432/postgres?sslmode=require
@@ -40,7 +40,7 @@ AGE_ENABLED=false
 
 ### 3. Install backend dependencies
 
-From `agents/`:
+From `agents/backend/`:
 
 ```bash
 uv sync
@@ -48,7 +48,7 @@ uv sync
 
 ### 4. Start backend
 
-From `agents/`:
+From `agents/backend/`:
 
 ```bash
 uv run uvicorn src.api.app:app --reload --port 8000
