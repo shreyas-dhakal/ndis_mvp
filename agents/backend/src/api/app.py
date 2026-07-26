@@ -19,6 +19,7 @@ from src.rag import (
     answer_question,
     chat_completion,
     close_pool,
+    create_audio_document,
     delete_document,
     ensure_schema,
     get_connection,
@@ -182,6 +183,8 @@ async def build_done_response(result: dict, thread_id: str) -> dict:
             entity_name=result.get("confirmed_entity_name"),
             entity_id=result.get("confirmed_entity_id"),
             create_new_entity=result.get("create_new_entity", False),
+            document_id=result.get("document_id"),
+            pdf_path=result.get("pdf_path"),
         )
         try:
             a2_result = run_agent2(record_id, record_timestamp, note_dict, spine_pool)
@@ -381,17 +384,26 @@ async def generate_from_audio(
 
     workflow = get_workflow()
     thread_id = str(uuid.uuid4())
+    audio_document_id = create_audio_document(
+        storage_path=str(audio_path),
+        filename=file.filename or audio_path.name,
+        mime_type=file.content_type,
+        thread_id=thread_id,
+    )
     config = {"configurable": {"thread_id": thread_id}}
 
     try:
         result = workflow.invoke({
             "audio_path": str(audio_path),
+            "document_id": audio_document_id,
             "whisper_model_size": whisper_model_size,
             "goals_context": "No goals provided."
         }, config=config)
     except GuardValidationError as e:
+        delete_document(audio_document_id)
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        delete_document(audio_document_id)
         raise HTTPException(status_code=500, detail=str(e))
 
     interrupt_data = extract_interrupt(result)

@@ -205,6 +205,27 @@ def sync_record_link(conn, *, from_record_id: str, to_record_id: str, link_type:
     )
 
 
+def delete_document_graph(conn, *, document_id: str) -> None:
+    _run_cypher(
+        conn,
+        (
+            f"MATCH (d:Document {{id: {_cypher_literal(document_id)}}})-[:CONTAINS_RECORD]->(r:Record) "
+            "DETACH DELETE r"
+        ),
+    )
+    _run_cypher(
+        conn,
+        f"MATCH (d:Document {{id: {_cypher_literal(document_id)}}}) DETACH DELETE d",
+    )
+
+
+def delete_entity_graph(conn, *, entity_id: str) -> None:
+    _run_cypher(
+        conn,
+        f"MATCH (e:Entity {{id: {_cypher_literal(entity_id)}}}) DETACH DELETE e",
+    )
+
+
 def graph_entity_context(conn, entity_id: str) -> dict[str, list[str]]:
     document_ids = _fetch_cypher_values(
         conn,

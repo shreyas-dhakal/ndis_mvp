@@ -3,6 +3,7 @@ from .db import close_pool, ensure_schema, get_connection, get_pool
 from .embeddings import chat_completion
 from .service import (
     answer_question,
+    create_audio_document,
     delete_document,
     ingest_upload,
     find_entity_candidates,
@@ -13,6 +14,7 @@ from .service import (
 
 __all__ = [
     "answer_question",
+    "create_audio_document",
     "chat_completion",
     "close_pool",
     "delete_document",
