@@ -5,6 +5,7 @@ import json
 import os
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from src.project_guards import GuardValidationError, require_valid_input
 from .chunking import ParsedRecord, chunk_text, classify_record_type
 from .db import (
     age_available,
+    delete_document_graph,
+    delete_entity_graph,
     graph_entity_context,
     get_connection,
     sync_document_node,
@@ -83,6 +86,67 @@ def find_entity_candidates(entity_name: str | None) -> list[dict[str, Any]]:
                 }
                 for row in cur.fetchall()
             ]
+
+
+def retrieve_linked_goal_history(
+    *, entity_id: str | None = None, entity_name: str | None = None, limit: int = 20
+) -> list[dict[str, Any]]:
+    """Return confirmed goal references from records linked to an entity."""
+    cleaned_name = (entity_name or "").strip()
+    if not entity_id and not cleaned_name:
+        return []
+
+    entity_filter = "e.id = %s" if entity_id else "(lower(e.display_name) = lower(%s) or exists (select 1 from unnest(e.aliases) alias where lower(alias) = lower(%s)))"
+    entity_params: list[Any] = [entity_id] if entity_id else [cleaned_name, cleaned_name]
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                f"""
+                select distinct on (r.id)
+                    r.id, r.record_type, r.title, r.created_at, r.body, r.content
+                from records r
+                cross join entities e
+                where {entity_filter}
+                  and (r.entity_id = e.id or exists (
+                      select 1 from entity_records er
+                      where er.entity_id = e.id and er.record_id = r.id
+                  ))
+                  and r.status = 'confirmed'
+                  and r.record_type in ('goal', 'plan', 'note')
+                order by r.id, r.created_at desc
+                """,
+                entity_params,
+            )
+            rows = cur.fetchall()
+
+    history: list[dict[str, Any]] = []
+    for row in sorted(
+        rows,
+        key=lambda item: item.get("created_at")
+        or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    ):
+        body = row.get("body") if isinstance(row.get("body"), dict) else {}
+        goals = body.get("linked_goals") or []
+        if isinstance(goals, str):
+            goals = [goals]
+        if not goals and row.get("record_type") == "goal":
+            goals = [row.get("title") or row.get("content") or "Goal record"]
+        for goal in goals:
+            goal_text = str(goal).strip()
+            if not goal_text:
+                continue
+            created_at = row.get("created_at")
+            history.append(
+                {
+                    "goal": goal_text,
+                    "record_type": row.get("record_type"),
+                    "date": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+                }
+            )
+            if len(history) >= limit:
+                return history
+    return history
 
 
 def _vector_literal(values: list[float]) -> str:
@@ -1106,6 +1170,43 @@ async def ingest_upload(
     }
 
 
+def create_audio_document(
+    *, storage_path: str, filename: str, mime_type: str | None, thread_id: str
+) -> str:
+    with get_connection() as conn:
+        with conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(
+                """
+                insert into documents
+                    (source, original_filename, mime_type, storage_path, metadata)
+                values (%s, %s, %s, %s, %s)
+                returning id
+                """,
+                [
+                    "audio",
+                    filename,
+                    mime_type,
+                    storage_path,
+                    json.dumps(
+                        {
+                            "doc_type": "audio",
+                            "ingest_source": "note_generator",
+                            "thread_id": thread_id,
+                        }
+                    ),
+                ],
+            )
+            document_id = str(cur.fetchone()["id"])
+            sync_document_node(
+                conn,
+                document_id=document_id,
+                source="audio",
+                original_filename=filename,
+            )
+            conn.commit()
+    return document_id
+
+
 def list_documents() -> list[dict[str, Any]]:
     with get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
@@ -1154,18 +1255,43 @@ def delete_document(document_id: str) -> dict[str, Any]:
     with get_connection() as conn:
         with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
+                """
+                select d.storage_path,
+                       array_agg(r.pdf_path) filter (where r.pdf_path is not null) as pdf_paths
+                from documents d
+                left join records r on r.document_id = d.id
+                where d.id = %s
+                group by d.id, d.storage_path
+                """,
+                [document_id],
+            )
+            artifact_row = cur.fetchone()
+            if not artifact_row:
+                raise HTTPException(status_code=404, detail="Document not found")
+
+            delete_document_graph(conn, document_id=document_id)
+            cur.execute(
                 "delete from documents where id = %s returning id, storage_path",
                 [document_id],
             )
             row = cur.fetchone()
+            cur.execute(
+                """
+                delete from entities e
+                where not exists (select 1 from entity_documents ed where ed.entity_id = e.id)
+                  and not exists (select 1 from entity_records er where er.entity_id = e.id)
+                  and not exists (select 1 from records r where r.entity_id = e.id)
+                returning id
+                """
+            )
+            orphan_entity_ids = [str(item["id"]) for item in cur.fetchall()]
+            for entity_id in orphan_entity_ids:
+                delete_entity_graph(conn, entity_id=entity_id)
             conn.commit()
 
-    if not row:
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    storage_path = row.get("storage_path")
-    if storage_path and os.path.exists(storage_path):
-        os.remove(storage_path)
+    for path in [artifact_row.get("storage_path"), *(artifact_row.get("pdf_paths") or [])]:
+        if path and os.path.exists(path):
+            os.remove(path)
 
     return {"deleted": True, "document_id": str(row["id"])}
 
@@ -1935,6 +2061,8 @@ async def store_generated_note(
     entity_name: str | None = None,
     entity_id: str | None = None,
     create_new_entity: bool = False,
+    document_id: str | None = None,
+    pdf_path: str | None = None,
 ) -> tuple[str, str]:
     note_text = _note_text(note_dict)
     if entity_name and entity_name.strip():
@@ -1968,6 +2096,7 @@ async def store_generated_note(
                 """
                 insert into records (
                     entity_id,
+                    document_id,
                     record_type,
                     status,
                     body,
@@ -1975,10 +2104,12 @@ async def store_generated_note(
                     author,
                     title,
                     content,
+                    pdf_path,
                     metadata,
                     tsv
                 )
                 values (
+                    %s,
                     %s,
                     'note',
                     'confirmed',
@@ -1988,16 +2119,19 @@ async def store_generated_note(
                     %s,
                     %s,
                     %s,
+                    %s,
                     to_tsvector('english', coalesce(%s, ''))
                 )
                 returning id, created_at
                 """,
                 [
                     entity_id,
+                    document_id,
                     json.dumps(note_dict),
                     f"thread:{thread_id}",
                     "Generated NDIS progress note",
                     note_text,
+                    pdf_path,
                     json.dumps({"origin": "note_generator", "thread_id": thread_id}),
                     note_text,
                 ],
@@ -2018,8 +2152,18 @@ async def store_generated_note(
                 record_type="note",
                 title="Generated NDIS progress note",
             )
+            if document_id:
+                sync_document_record_edge(conn, document_id=document_id, record_id=record_id)
             if entity_id:
                 _link_record_to_entity(cur, entity_id=entity_id, record_id=record_id)
+                if document_id:
+                    _link_document_to_entity(cur, entity_id=entity_id, document_id=document_id)
+                    sync_entity_document_edge(
+                        conn,
+                        entity_id=entity_id,
+                        document_id=document_id,
+                        relation_type="about",
+                    )
                 sync_entity_record_edge(
                     conn,
                     entity_id=entity_id,
@@ -2031,6 +2175,7 @@ async def store_generated_note(
                     """
                     insert into chunks (
                         record_id,
+                        document_id,
                         record_type,
                         section,
                         offset_start,
@@ -2042,6 +2187,7 @@ async def store_generated_note(
                         tsv
                     )
                     values (
+                        %s,
                         %s,
                         'note',
                         'generated_note',
@@ -2056,6 +2202,7 @@ async def store_generated_note(
                     """,
                     [
                         record_id,
+                        document_id,
                         len(note_text),
                         note_text,
                         json.dumps(

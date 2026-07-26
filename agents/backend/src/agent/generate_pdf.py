@@ -1,5 +1,6 @@
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -122,6 +123,7 @@ def soap_to_pdf(
             "participant_voice": getattr(soap_data, "participant_voice", ""),
             "risks_incidents": getattr(soap_data, "risks_incidents", ""),
             "consent_noted": getattr(soap_data, "consent_noted", None),
+            "goal_history": getattr(soap_data, "goal_history", []),
         }
 
     encounter_date = encounter_date or datetime.now().strftime("%B %d, %Y")
@@ -177,7 +179,7 @@ def soap_to_pdf(
         ]))
         story.append(header_table)
 
-        body_para = Paragraph(text.replace("\n", "<br/>"), styles["SectionBody"])
+        body_para = Paragraph(escape(str(text)).replace("\n", "<br/>"), styles["SectionBody"])
         body_table = Table([[body_para]], colWidths=[6.5 * inch])
         body_table.setStyle(TableStyle([
             ("BOX", (0, 0), (-1, -1), 0.5, RULE),
@@ -204,7 +206,7 @@ def soap_to_pdf(
     story.append(header_table)
 
     if goals:
-        goal_paras = [Paragraph(f"\u2022 {g}", styles["GoalItem"]) for g in goals]
+        goal_paras = [Paragraph(f"\u2022 {escape(str(g))}", styles["GoalItem"]) for g in goals]
         body_content = goal_paras
     else:
         body_content = [Paragraph("Not documented.", styles["SectionBody"])]
@@ -218,6 +220,41 @@ def soap_to_pdf(
         ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
     ]))
     story.append(body_table)
+    story.append(Spacer(1, 12))
+
+    history = data.get("goal_history") or []
+    history_header = Table(
+        [[Paragraph("LINKED GOAL HISTORY", styles["SectionHeading"])]],
+        colWidths=[6.5 * inch],
+    )
+    history_header.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), NAVY),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    story.append(history_header)
+    if history:
+        history_content = [
+            Paragraph(
+                f"\u2022 {escape(str(item.get('goal', '')))} "
+                f"({escape(str(item.get('record_type', 'record')))}, "
+                f"{escape(str(item.get('date', 'undated')))})",
+                styles["GoalItem"],
+            )
+            for item in history
+        ]
+    else:
+        history_content = [Paragraph("No linked goal history retrieved.", styles["SectionBody"])]
+    history_table = Table([[item] for item in history_content], colWidths=[6.5 * inch])
+    history_table.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.5, RULE),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(history_table)
     story.append(Spacer(1, 12))
 
     document = SimpleDocTemplate(

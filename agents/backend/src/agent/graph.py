@@ -18,7 +18,11 @@ from src.ai.runtime import transcribe_audio_file
 from .generate_pdf import soap_to_pdf
 from .local_llm import invoke_structured
 from src.project_guards import require_valid_input, require_valid_output
-from src.rag.service import _extract_note_entity, find_entity_candidates
+from src.rag.service import (
+    _extract_note_entity,
+    find_entity_candidates,
+    retrieve_linked_goal_history,
+)
 
 load_dotenv()
 
@@ -58,6 +62,8 @@ class AgentState(TypedDict):
     note_confirmation_pending: bool
     confirmed_entity_id: Optional[str]
     create_new_entity: bool
+    goal_history: list[dict]
+    document_id: Optional[str]
 
 
 sys_prompt = """
@@ -132,6 +138,19 @@ def generate_progress_note(state: AgentState):
     return {"progress_note": result}
 
 
+def retrieve_goal_history_node(state: AgentState):
+    """Run alongside entity review using the entity detected in the draft."""
+    note = state.get("progress_note")
+    if not note:
+        return {"goal_history": []}
+    detected_name, _entity_type, _aliases = _extract_note_entity(
+        note.model_dump(), state.get("transcript", "")
+    )
+    return {
+        "goal_history": retrieve_linked_goal_history(entity_name=detected_name)
+    }
+
+
 def human_review_node(state: AgentState) -> AgentState:
     note = state.get("progress_note")
     if not note:
@@ -198,8 +217,17 @@ def finalize_node(state: AgentState) -> AgentState:
     if not soap_data:
         return {"final_response": "Error: Note Missing"}
 
+    goal_history = state.get("goal_history") or []
+    confirmed_entity_id = state.get("confirmed_entity_id")
+    if confirmed_entity_id:
+        goal_history = retrieve_linked_goal_history(entity_id=confirmed_entity_id)
+
     pdf_path = OUTPUT_DIR / f"soap_{uuid.uuid4().hex}.pdf"
-    soap_to_pdf(soap_data, pdf_path)
+    soap_to_pdf(
+        {**soap_data.model_dump(), "goal_history": goal_history},
+        pdf_path,
+        participant_name=state.get("confirmed_entity_name") or "Participant",
+    )
     return {
         "pdf_path": str(pdf_path),
         "final_response": "NDIS Progress Note approved and saved",
@@ -218,12 +246,14 @@ def build_graph():
     graph = StateGraph(AgentState)
     graph.add_node("transcribe_audio", transcribe_audio)
     graph.add_node("generate_progress_note", generate_progress_note)
+    graph.add_node("retrieve_goal_history", retrieve_goal_history_node)
     graph.add_node("human_review_node", human_review_node)
     graph.add_node("finalize_node", finalize_node)
 
     graph.add_edge(START, "transcribe_audio")
     graph.add_edge("transcribe_audio", "generate_progress_note")
     graph.add_edge("generate_progress_note", "human_review_node")
+    graph.add_edge("generate_progress_note", "retrieve_goal_history")
     graph.add_conditional_edges("human_review_node", check_humanfb)
     graph.add_edge("finalize_node", END)
 

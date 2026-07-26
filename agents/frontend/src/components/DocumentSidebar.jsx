@@ -68,7 +68,7 @@ export default function DocumentSidebar() {
       formData.append("file", pendingEntity.file);
       formData.append("confirmation_token", pendingEntity.confirmation_token);
       formData.append("entity_confirmed", "true");
-      formData.append("entity_name", (confirmed ? pendingEntity.entity.display_name : correctedName).trim());
+      formData.append("entity_name", (correctedName.trim() || pendingEntity.entity.display_name || "").trim());
       if (selectedEntityId) formData.append("entity_id", selectedEntityId);
       formData.append("create_new_entity", createNew ? "true" : "false");
       const result = await api.postForm("/documents", formData);
@@ -87,9 +87,10 @@ export default function DocumentSidebar() {
 
   const handleDelete = async (id) => {
     try {
+      const document = documents.find((item) => item.document_id === id);
       await api.delete(`/documents/${id}`);
       setDocuments((prev) => prev.filter((d) => d.document_id !== id));
-      setStatus("Document removed.");
+      setStatus(`${document?.doc_type === "audio" ? "Audio" : "Document"} removed.`);
     } catch (err) {
       setError(err.message);
     }
@@ -163,7 +164,7 @@ export default function DocumentSidebar() {
                   {doc.name}
                 </div>
                 <div className="text-[11px] text-slate mt-0.5">
-                  {doc.records_count} notes · ready to search
+                  {doc.doc_type === "audio" ? "Audio recording" : `${doc.records_count} notes · ready to search`}
                 </div>
                 {doc.entity_names?.length ? (
                   <div className="text-[11px] text-teal-700 mt-0.5 truncate">
