@@ -623,10 +623,6 @@ def _ensure_entity(
     create_new: bool = False,
 ) -> dict[str, Any] | None:
     cleaned_name = (entity_name or "").strip()
-    if not cleaned_name:
-        return None
-
-    aliases = _split_aliases(entity_aliases)
     if entity_id:
         cur.execute(
             "select id, entity_type, display_name, aliases from entities where id = %s",
@@ -639,6 +635,11 @@ def _ensure_entity(
         cur.execute("update entities set aliases = %s where id = %s", [merged_aliases, entity_id])
         row["aliases"] = merged_aliases
         return row
+
+    if not cleaned_name:
+        return None
+
+    aliases = _split_aliases(entity_aliases)
     if create_new:
         cur.execute(
             """
