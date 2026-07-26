@@ -11,11 +11,13 @@ from .config import (
     DEFAULT_CHAT_TARGET,
     DEFAULT_EMBEDDING_TARGET,
     DEFAULT_TRANSCRIPTION_TARGET,
+    ENGLISH_OUTPUT_INSTRUCTION,
     EMBED_BATCH_SIZE,
     EMBED_CONCURRENCY,
     EMBEDDING_DIM,
     OLLAMA_BASE_URL,
     VOICE_TRANSCRIPTION_LANGUAGE,
+    VOICE_TRANSCRIPTION_TASK,
     ModelTarget,
     get_azure_openai_settings,
     normalize_provider,
@@ -157,6 +159,18 @@ def chat_completion(
     deployment: str | None = None,
     temperature: float | None = None,
 ) -> str:
+    messages = [message.copy() for message in messages]
+    system_message = next(
+        (message for message in messages if message.get("role") == "system"),
+        None,
+    )
+    if system_message is None:
+        messages.insert(0, {"role": "system", "content": ENGLISH_OUTPUT_INSTRUCTION})
+    else:
+        system_message["content"] = (
+            f"{system_message.get('content', '').strip()}\n\n"
+            f"{ENGLISH_OUTPUT_INSTRUCTION}"
+        ).strip()
     target = _resolve_target(
         default=DEFAULT_CHAT_TARGET,
         provider=provider,
@@ -376,7 +390,13 @@ def transcribe_audio_file(
             device="cpu",
             compute_type="int8",
         )
-        segments, _info = whisper_model.transcribe(audio_path, vad_filter=True)
+        whisper_kwargs: dict[str, Any] = {
+            "task": VOICE_TRANSCRIPTION_TASK,
+            "vad_filter": True,
+        }
+        if language or VOICE_TRANSCRIPTION_LANGUAGE:
+            whisper_kwargs["language"] = language or VOICE_TRANSCRIPTION_LANGUAGE
+        segments, _info = whisper_model.transcribe(audio_path, **whisper_kwargs)
         lines = [
             {
                 "speaker": "SPEAKER_00",
@@ -398,13 +418,22 @@ def transcribe_audio_file(
                 response = _sync_client().post(
                     _azure_url(
                         deployment=target.deployment or target.model,
-                        path="audio/transcriptions",
+                        path=(
+                            "audio/translations"
+                            if VOICE_TRANSCRIPTION_TASK == "translate"
+                            else "audio/transcriptions"
+                        ),
                     ),
                     headers=_azure_headers(),
                     data={
                         "model": target.model,
                         "response_format": "json",
-                        "language": language or VOICE_TRANSCRIPTION_LANGUAGE,
+                        **(
+                            {"language": language or VOICE_TRANSCRIPTION_LANGUAGE}
+                            if VOICE_TRANSCRIPTION_TASK == "transcribe"
+                            and (language or VOICE_TRANSCRIPTION_LANGUAGE)
+                            else {}
+                        ),
                     },
                     files={
                         "file": (

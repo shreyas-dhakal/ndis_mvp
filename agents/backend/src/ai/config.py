@@ -130,9 +130,14 @@ TRANSCRIPTION_DEPLOYMENT = _env_optional(
     "TRANSCRIPTION_DEPLOYMENT",
     "AZURE_OPENAI_TRANSCRIPTION_DEPLOYMENT",
 ) or TRANSCRIPTION_MODEL
-VOICE_TRANSCRIPTION_LANGUAGE = _env(
-    "VOICE_TRANSCRIPTION_LANGUAGE",
-    "en-AU",
+VOICE_TRANSCRIPTION_LANGUAGE = _env_optional("VOICE_TRANSCRIPTION_LANGUAGE")
+VOICE_TRANSCRIPTION_TASK = (_env_optional("VOICE_TRANSCRIPTION_TASK") or "translate").lower()
+if VOICE_TRANSCRIPTION_TASK not in {"transcribe", "translate"}:
+    raise RuntimeError("VOICE_TRANSCRIPTION_TASK must be 'transcribe' or 'translate'")
+
+ENGLISH_OUTPUT_INSTRUCTION = (
+    "Always respond in English, regardless of the language used in the input. "
+    "Translate internally when necessary and never output non-English text."
 )
 
 TTS_PROVIDER = normalize_provider(

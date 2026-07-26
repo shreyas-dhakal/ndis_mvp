@@ -21,6 +21,10 @@ CHAT_PROVIDER=azure_openai
 AGENT_PROVIDER=azure_openai
 EMBEDDING_PROVIDER=azure_openai
 VOICE_PROVIDER=faster_whisper
+# Translate any spoken language to English during transcription.
+VOICE_TRANSCRIPTION_TASK=translate
+# Leave unset for automatic source-language detection.
+# VOICE_TRANSCRIPTION_LANGUAGE=
 
 CHAT_MODEL=gpt-5.4
 CHAT_DEPLOYMENT=gpt-5.4

@@ -13,7 +13,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from src.ai.config import VOICE_PROVIDER
+from src.ai.config import ENGLISH_OUTPUT_INSTRUCTION, VOICE_PROVIDER
 from src.ai.runtime import transcribe_audio_file
 from .generate_pdf import soap_to_pdf
 from .local_llm import invoke_structured
@@ -69,6 +69,9 @@ class AgentState(TypedDict):
 sys_prompt = """
 You are an experienced NDIS support documentation assistant.
 
+Always write the progress note in English, regardless of the language spoken in the
+source conversation. Translate internally when necessary.
+
 Convert the conversation transcript into a professional NDIS Progress Note.
 - Use ONLY information present in the transcript.
 - Link activities to NDIS goals where relevant.
@@ -78,7 +81,7 @@ Convert the conversation transcript into a professional NDIS Progress Note.
 - For linked_goals, use an empty list [] if no goals are mentioned.
 - For consent_noted, use true if consent was clearly given, false if clearly not given,
   and null if consent was not discussed.
-"""
+""" + ENGLISH_OUTPUT_INSTRUCTION
 
 human_prompt = """
 Transcript:
