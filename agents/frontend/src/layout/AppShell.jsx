@@ -15,12 +15,8 @@ export default function AppShell() {
   return (
     <div className="min-h-screen bg-paper text-ink md:flex">
       <aside className="app-rail flex w-full flex-col bg-ink px-5 py-5 text-white md:sticky md:top-0 md:h-screen md:w-[248px] md:shrink-0">
-        <div className="flex items-center gap-3">
-           <div className="brand-mark"><span>c</span></div>
-           <div>
-             <div className="font-display text-[17px] font-semibold tracking-tight">Caseload AI</div>
-             <div className="font-mono text-[9px] uppercase tracking-[0.2em] text-white/40">support notes</div>
-          </div>
+        <div>
+          <img className="brand-logo" src="/caseloadai.png" alt="Caseload AI" />
         </div>
 
         <div className="mt-14 mb-3 px-3 font-mono text-[10px] uppercase tracking-[0.2em] text-white/35">Main menu</div>

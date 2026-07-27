@@ -6,8 +6,7 @@
 
 body { margin: 0; background: #f4f3ee; font-family: "DM Sans", sans-serif; }
 button, input, textarea, select { font: inherit; }
-.brand-mark { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px 10px 10px 3px; background: #d8ff54; color: #17252c; font-family: "Space Grotesk", sans-serif; font-weight: 700; font-size: 20px; transform: rotate(-7deg); }
-.brand-mark span { transform: rotate(7deg); }
+.brand-logo { display: block; width: min(190px, 100%); height: auto; }
 .rail-link { display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px; color: rgba(255,255,255,.55); font-size: 13px; transition: .2s ease; }
 .rail-link:hover { color: #fff; background: rgba(255,255,255,.06); }
 .rail-link.is-active { color: #18272c; background: #d8ff54; font-weight: 600; }

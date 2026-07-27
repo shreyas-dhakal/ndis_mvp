@@ -73,12 +73,48 @@ CREATE TABLE IF NOT EXISTS entity_records (
     UNIQUE (entity_id, record_id, relation_type)
 );
 
-ALTER TABLE records ADD COLUMN IF NOT EXISTS document_id UUID REFERENCES documents(id) ON DELETE CASCADE;
-ALTER TABLE records ADD COLUMN IF NOT EXISTS title TEXT;
-ALTER TABLE records ADD COLUMN IF NOT EXISTS content TEXT;
-ALTER TABLE records ADD COLUMN IF NOT EXISTS provenance_pointer TEXT;
-ALTER TABLE records ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE records ADD COLUMN IF NOT EXISTS tsv TSVECTOR;
+-- Avoid requesting an ACCESS EXCLUSIVE lock on every startup when the columns
+-- already exist. This matters for pooled databases with long-lived sessions.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'records' AND column_name = 'document_id'
+    ) THEN
+        ALTER TABLE records ADD COLUMN document_id UUID REFERENCES documents(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'records' AND column_name = 'title'
+    ) THEN
+        ALTER TABLE records ADD COLUMN title TEXT;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'records' AND column_name = 'content'
+    ) THEN
+        ALTER TABLE records ADD COLUMN content TEXT;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'records' AND column_name = 'provenance_pointer'
+    ) THEN
+        ALTER TABLE records ADD COLUMN provenance_pointer TEXT;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'records' AND column_name = 'metadata'
+    ) THEN
+        ALTER TABLE records ADD COLUMN metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'records' AND column_name = 'tsv'
+    ) THEN
+        ALTER TABLE records ADD COLUMN tsv TSVECTOR;
+    END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS links (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
